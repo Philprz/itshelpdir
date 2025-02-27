@@ -20,9 +20,10 @@ fi
 pip install -r requirements.txt
 pip install gunicorn eventlet
 
-# Exécuter les migrations de base de données avec gestion d'erreur
+# Exécuter les migrations de base de données
 echo "Initialisation de la base de données..."
-python -c "
+python init_database.py
+
 try:
     from base_de_donnees import init_db
     import asyncio
