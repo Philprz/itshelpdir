@@ -13,15 +13,13 @@ if ! command -v python &> /dev/null; then
     exit 1
 fi
 
+# S'assurer que toutes les dépendances sont installées
+echo "Installation des dépendances..."
+pip install -r requirements.txt
+
 # Exécuter les migrations de base de données
 echo "Initialisation de la base de données..."
 python -c "from base_de_donnees import init_db; import asyncio; asyncio.run(init_db())"
-
-# Vérifier que Gunicorn est disponible
-if ! command -v gunicorn &> /dev/null; then
-    echo "Gunicorn n'est pas disponible. Installation..."
-    pip install gunicorn
-fi
 
 # Démarrer l'application avec Gunicorn
 echo "Démarrage de l'application sur le port ${PORT:-5000}..."
