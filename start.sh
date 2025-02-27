@@ -37,4 +37,4 @@ except Exception as e:
 
 # Démarrer l'application avec Gunicorn
 echo "Démarrage de l'application sur le port ${PORT:-5000}..."
-gunicorn --worker-class eventlet -w 1 app:app -b 0.0.0.0:${PORT:-5000}
+gunicorn --worker-class gevent -w 1 app:app -b 0.0.0.0:${PORT:-5000}
