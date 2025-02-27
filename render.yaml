@@ -1,0 +1,55 @@
+services:
+  - type: web
+    name: its-help-chatbot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: ./start.sh
+    runtime: python
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    numInstances:
+      min: 1
+      max: 2
+      targetMemoryPercent: 80 # Scale up when memory usage is above 80%
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: QDRANT_COLLECTION_JIRA
+        value: JIRA
+      - key: QDRANT_COLLECTION_ZENDESK
+        value: ZENDESK
+      - key: QDRANT_COLLECTION_CONFLUENCE
+        value: CONFLUENCE
+      - key: QDRANT_COLLECTION_NETSUITE
+        value: NETSUITE
+      - key: QDRANT_COLLECTION_NETSUITE_DUMMIES
+        value: NETSUITE_DUMMIES
+      - key: QDRANT_COLLECTION_SAP
+        value: SAP
+      - key: TIMEOUT_MULTIPLIER
+        value: 1.2
+      - key: EMBEDDING_CACHE_SIZE
+        value: 2000
+      - key: MAX_SEARCH_RESULTS
+        value: 5
+  
+  - type: redis
+    name: its-help-cache
+    ipAllowList: # Only allow internal connections
+      - source: 0.0.0.0/0
+        description: everywhere
+    plan: free
+    maxmemoryPolicy: volatile-lru

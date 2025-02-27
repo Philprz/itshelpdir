@@ -1,0 +1,14 @@
+# Ignorer les fichiers log
+*.log
+
+# Ignorer les dossiers spécifiques à l'IDE
+.idea/
+.vscode/
+
+# Ignorer le dossier node_modules (pour les projets Node.js)
+node_modules/
+
+# Ignorer les fichiers de configuration personnels
+.env
+config/local.php
+~$*

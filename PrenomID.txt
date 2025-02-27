@@ -1,0 +1,10 @@
+Prenom,Id_membre,Canal,Email
+Philippe,U073GDZN3NK,D073ZEWQ4JY,p.perez@it-spirit.com
+Victor,U02F75FC6MD,D073WT1BGNP,v.delgrande@it-spirit.com
+Chrystele,U07KD402TL2,D07KD403RA6,c.grand-clement@it-spirit.com
+Emilie,U34TTLA9Y,D0749LL3ZKK,emilie.bardin@lbcroissance.fr
+Severine,U040HNFHN0P,D074KQ7S12L,s.gacon@it-spirit.com
+Bruno,U0CG7E9B6,D073WT19751,b.charnal@it-spirit.com
+Ismahane,U01U3T6JT1P,D073ZEWSC3E,i.moreau@it-spirit.com
+Nicolas,U0CBLG750,D074KQ7PQ2U,n.bravin@it-spirit.com
+
