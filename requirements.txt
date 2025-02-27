@@ -44,7 +44,7 @@ python-dotenv==1.0.1
 python-engineio==4.11.2
 python-Levenshtein==0.26.1
 python-socketio==5.12.1
-pytz==2025.1
+pytz
 pywin32==308
 qdrant-client==1.13.2
 RapidFuzz==3.12.1
