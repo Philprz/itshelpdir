@@ -187,19 +187,9 @@ def initialize():
     app.config['start_time'] = time.time()
     
     try:
-        # Utilisation de la boucle d'événements existante
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Créer une nouvelle boucle si celle-ci est déjà en cours d'exécution
-            new_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(new_loop)
-            new_loop.run_until_complete(init_db())
-            new_loop.run_until_complete(search_factory.initialize())
-            new_loop.close()
-        else:
-            # Utiliser la boucle existante
-            loop.run_until_complete(init_db())
-            loop.run_until_complete(search_factory.initialize())
+        # Toujours créer et utiliser une nouvelle boucle d'événements
+        asyncio.run(init_db())
+        asyncio.run(search_factory.initialize())
         
         logger.info("Base de données et factory de recherche initialisés")
         
