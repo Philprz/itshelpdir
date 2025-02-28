@@ -224,10 +224,52 @@ async def process_message(user_id, message):
             'error_id': stats["error_count"]
         }, room=user_id)
 
-# Définir un drapeau global
+# Variables globales pour le suivi de l'initialisation
 _is_initialized = False
+_initialization_started = False
+_db_initialized = False
+_search_factory_initialized = False
+_cache_initialized = False
+
+# Décorateur de timeout
+def timeout_handler(seconds=2, default_response=None):
+    """Décorateur pour ajouter un timeout aux routes Flask"""
+    def decorator(f):
+        from functools import wraps
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            from threading import Thread
+            
+            result = [default_response]
+            
+            def target():
+                try:
+                    result[0] = f(*args, **kwargs)
+                except Exception as e:
+                    logger.error(f"Erreur dans route avec timeout: {str(e)}")
+                    result[0] = jsonify({
+                        "status": "error",
+                        "message": "Erreur interne"
+                    }), 500
+            
+            thread = Thread(target=target)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=seconds)
+            
+            if thread.is_alive():
+                logger.warning(f"Timeout de {seconds}s atteint pour {f.__name__}")
+                return jsonify({
+                    "status": "timeout",
+                    "message": f"La requête a pris plus de {seconds}s et a été interrompue"
+                }), 503
+            
+            return result[0]
+        return wrapped
+    return decorator
+
 def initialize():
-    """Initialisation améliorée des composants au démarrage"""
+    """Initialisation progressive des composants au démarrage"""
     global chatbot, _is_initialized, _initialization_started
     
     # Éviter les initialisations multiples
@@ -241,26 +283,63 @@ def initialize():
         # Lancer un thread séparé pour l'initialisation asynchrone
         import threading
         def async_init():
+            global _db_initialized, _search_factory_initialized, _cache_initialized, _is_initialized, chatbot
+            
             # Créer une nouvelle boucle pour ce thread
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
             try:
-                # Exécuter les initialisations
-                new_loop.run_until_complete(init_db())
-                new_loop.run_until_complete(search_factory.initialize())
+                # Initialisation de la base de données avec timeout
+                try:
+                    new_loop.run_until_complete(
+                        asyncio.wait_for(init_db(), timeout=15.0)
+                    )
+                    _db_initialized = True
+                    logger.info("Base de données initialisée avec succès")
+                except asyncio.TimeoutError:
+                    logger.error("Timeout lors de l'initialisation de la base de données")
+                except Exception as e:
+                    logger.error(f"Erreur lors de l'initialisation de la base de données: {str(e)}")
                 
+                # Initialisation du search factory avec timeout
+                try:
+                    new_loop.run_until_complete(
+                        asyncio.wait_for(search_factory.initialize(), timeout=15.0)
+                    )
+                    _search_factory_initialized = True
+                    logger.info("Search factory initialisé avec succès")
+                except asyncio.TimeoutError:
+                    logger.error("Timeout lors de l'initialisation du search factory")
+                except Exception as e:
+                    logger.error(f"Erreur lors de l'initialisation du search factory: {str(e)}")
+                
+                # Initialisation du cache avec timeout
                 if hasattr(global_cache, 'start_cleanup_task'):
-                    new_loop.run_until_complete(global_cache.start_cleanup_task())
-                    
-                # Initialiser le chatbot (opération synchrone)
-                global chatbot, _is_initialized
-                chatbot = ChatBot(
-                    openai_key=os.getenv('OPENAI_API_KEY'),
-                    qdrant_url=os.getenv('QDRANT_URL'),
-                    qdrant_api_key=os.getenv('QDRANT_API_KEY')
-                )
-                _is_initialized = True
-                logger.info("Initialisation complète effectuée avec succès")
+                    try:
+                        new_loop.run_until_complete(
+                            asyncio.wait_for(global_cache.start_cleanup_task(), timeout=5.0)
+                        )
+                        _cache_initialized = True
+                        logger.info("Cache initialisé avec succès")
+                    except asyncio.TimeoutError:
+                        logger.error("Timeout lors de l'initialisation du cache")
+                    except Exception as e:
+                        logger.error(f"Erreur lors de l'initialisation du cache: {str(e)}")
+                
+                # Initialiser le chatbot seulement si les composants essentiels sont prêts
+                if _db_initialized and _search_factory_initialized:
+                    try:
+                        chatbot = ChatBot(
+                            openai_key=os.getenv('OPENAI_API_KEY'),
+                            qdrant_url=os.getenv('QDRANT_URL'),
+                            qdrant_api_key=os.getenv('QDRANT_API_KEY')
+                        )
+                        _is_initialized = True
+                        logger.info("Chatbot initialisé avec succès")
+                    except Exception as e:
+                        logger.critical(f"Erreur initialisation chatbot: {str(e)}")
+                else:
+                    logger.warning("Chatbot non initialisé - composants nécessaires manquants")
             except Exception as e:
                 logger.critical(f"Erreur dans le thread d'initialisation: {str(e)}\n{traceback.format_exc()}")
             finally:
@@ -278,8 +357,13 @@ def initialize():
 
 @app.before_request
 def before_request_func():
-    global _is_initialized, _initialization_started
+    global _is_initialized, _initialization_started, chatbot
+    global _db_initialized, _search_factory_initialized
 
+    # Pour les health checks, permettre l'accès même pendant l'initialisation
+    if request.path == '/health':
+        return None
+        
     # Si déjà initialisé, continuer normalement
     if _is_initialized and chatbot is not None:
         return None
@@ -287,18 +371,80 @@ def before_request_func():
     # Si l'initialisation n'a pas encore commencé, la démarrer
     if not _initialization_started:
         initialize()
-        
-    # Pour les health checks, permettre l'accès même pendant l'initialisation
-    if request.path == '/health':
-        return None
-        
-    # Pour les autres routes, renvoyer un statut d'initialisation en cours
+        return jsonify({
+            "status": "starting",
+            "message": "Le service démarre, veuillez réessayer dans quelques instants"
+        }), 503  # Service Unavailable
+    
+    # Tentative d'initialisation tardive du chatbot si les composants essentiels sont prêts
+    if _db_initialized and _search_factory_initialized and not _is_initialized:
+        try:
+            chatbot = ChatBot(
+                openai_key=os.getenv('OPENAI_API_KEY'),
+                qdrant_url=os.getenv('QDRANT_URL'),
+                qdrant_api_key=os.getenv('QDRANT_API_KEY')
+            )
+            _is_initialized = True
+            logger.info("Chatbot initialisé avec succès (late init)")
+            return None
+        except Exception as e:
+            logger.error(f"Erreur initialisation tardive du chatbot: {str(e)}")
+    
+    # Pour les autres routes, renvoyer un statut d'initialisation détaillé
+    components = {
+        "database": _db_initialized,
+        "search_factory": _search_factory_initialized,
+        "cache": _cache_initialized
+    }
+    
     return jsonify({
         "status": "initializing",
-        "message": "Le service est en cours d'initialisation, veuillez réessayer dans quelques instants"
+        "message": "Le service est en cours d'initialisation, veuillez réessayer dans quelques instants",
+        "components": components
     }), 503  # Service Unavailable
-# Routes pour la gestion de l'interface utilisateur (pourraient être ajoutées)
-@app.route('/api/stats')
+
+@app.route('/health')
+@timeout_handler(seconds=2, default_response=jsonify({"status": "timeout", "message": "Health check timeout"}))
+def health():
+    """Endpoint de vérification de santé avec état détaillé"""
+    # Vérification de l'état d'initialisation
+    global _is_initialized, _initialization_started
+    global _db_initialized, _search_factory_initialized, _cache_initialized
+    
+    if not _initialization_started:
+        status = "starting"
+    elif not _is_initialized:
+        status = "initializing"
+    else:
+        status = "ok"
+    
+    # Stats de base
+    health_stats = {
+        "uptime": time.time() - app.config.get('start_time', time.time()),
+        "requests": stats.get("requests_total", 0),
+        "errors": stats.get("error_count", 0),
+        "avg_response_time": stats.get("avg_response_time", 0),
+        "initialization_status": status
+    }
+    
+    # Vérification plus détaillée de l'état de chaque composant
+    components = {
+        "database": _db_initialized,
+        "search_factory": _search_factory_initialized,
+        "cache": _cache_initialized,
+        "chatbot": _is_initialized and chatbot is not None
+    }
+    
+    health_stats["components"] = components
+    
+    # Autres vérifications comme avant...
+    
+    return jsonify({
+        "status": status, 
+        "timestamp": datetime.now().isoformat(),
+        "checks": components,
+        "stats": health_stats
+    })@app.route('/api/stats')
 def get_stats():
     """API pour récupérer les statistiques d'utilisation"""
     return jsonify(stats)
