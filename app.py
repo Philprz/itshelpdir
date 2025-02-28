@@ -228,81 +228,54 @@ async def process_message(user_id, message):
 _is_initialized = False
 def initialize():
     """Initialisation améliorée des composants au démarrage"""
-    global chatbot, _is_initialized
+    global chatbot, _is_initialized, _initialization_started
     
     # Éviter les initialisations multiples
     if _is_initialized:
         return
         
     app.config['start_time'] = time.time()
+    _initialization_started = True
     
     try:
-        # Utiliser l'event loop existant au lieu d'en créer un nouveau
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Pour les environnements où la boucle est déjà en cours d'exécution
-            # comme avec Gunicorn+gevent, nous utilisons une approche non-bloquante
-            _is_initialized = True  # Marquer comme initialisé pour éviter les appels ultérieurs
-            
-            # Lancer un thread séparé pour l'initialisation asynchrone
-            import threading
-            def async_init():
-                # Créer une nouvelle boucle pour ce thread
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                try:
-                    # Exécuter les initialisations
-                    new_loop.run_until_complete(init_db())
-                    new_loop.run_until_complete(search_factory.initialize())
+        # Lancer un thread séparé pour l'initialisation asynchrone
+        import threading
+        def async_init():
+            # Créer une nouvelle boucle pour ce thread
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                # Exécuter les initialisations
+                new_loop.run_until_complete(init_db())
+                new_loop.run_until_complete(search_factory.initialize())
+                
+                if hasattr(global_cache, 'start_cleanup_task'):
+                    new_loop.run_until_complete(global_cache.start_cleanup_task())
                     
-                    if hasattr(global_cache, 'start_cleanup_task'):
-                        new_loop.run_until_complete(global_cache.start_cleanup_task())
-                        
-                    # Initialiser le chatbot (opération synchrone)
-                    global chatbot
-                    chatbot = ChatBot(
-                        openai_key=os.getenv('OPENAI_API_KEY'),
-                        qdrant_url=os.getenv('QDRANT_URL'),
-                        qdrant_api_key=os.getenv('QDRANT_API_KEY')
-                    )
-                    logger.info("Initialisation complète effectuée avec succès")
-                except Exception as e:
-                    logger.critical(f"Erreur dans le thread d'initialisation: {str(e)}")
-                finally:
-                    new_loop.close()
-            
-            # Démarrer le thread d'initialisation en arrière-plan
-            init_thread = threading.Thread(target=async_init)
-            init_thread.daemon = True
-            init_thread.start()
-            
-            # Retourner immédiatement pour ne pas bloquer les requêtes
-            logger.info("Initialisation démarrée en arrière-plan")
-            return
-        else:
-            # Pour les environnements où nous pouvons exécuter directement (rare avec Flask+Gunicorn)
-            loop.run_until_complete(init_db())
-            loop.run_until_complete(search_factory.initialize())
-            
-            # Initialisation du chatbot
-            chatbot = ChatBot(
-                openai_key=os.getenv('OPENAI_API_KEY'),
-                qdrant_url=os.getenv('QDRANT_URL'),
-                qdrant_api_key=os.getenv('QDRANT_API_KEY')
-            )
-            logger.info("Chatbot initialisé")
-            
-            # Initialisation du cache global
-            if hasattr(global_cache, 'start_cleanup_task'):
-                loop.run_until_complete(global_cache.start_cleanup_task())
-                logger.info("Tâche de nettoyage du cache démarrée")
-            
-            _is_initialized = True
+                # Initialiser le chatbot (opération synchrone)
+                global chatbot, _is_initialized
+                chatbot = ChatBot(
+                    openai_key=os.getenv('OPENAI_API_KEY'),
+                    qdrant_url=os.getenv('QDRANT_URL'),
+                    qdrant_api_key=os.getenv('QDRANT_API_KEY')
+                )
+                _is_initialized = True
+                logger.info("Initialisation complète effectuée avec succès")
+            except Exception as e:
+                logger.critical(f"Erreur dans le thread d'initialisation: {str(e)}\n{traceback.format_exc()}")
+            finally:
+                new_loop.close()
         
+        # Démarrer le thread d'initialisation en arrière-plan
+        init_thread = threading.Thread(target=async_init)
+        init_thread.daemon = True
+        init_thread.start()
+        
+        # Retourner immédiatement pour ne pas bloquer les requêtes
+        logger.info("Initialisation démarrée en arrière-plan")
     except Exception as e:
         logger.critical(f"Erreur critique d'initialisation: {str(e)}\n{traceback.format_exc()}")
-        raise
-# Utiliser before_request comme alternative
+
 @app.before_request
 def before_request_func():
     global _is_initialized, _initialization_started
@@ -311,22 +284,19 @@ def before_request_func():
     if _is_initialized and chatbot is not None:
         return None
         
-    # Si l'initialisation n'a pas encore commencé
+    # Si l'initialisation n'a pas encore commencé, la démarrer
     if not _initialization_started:
-        _initialization_started = True
         initialize()
         
-    # Si l'initialisation est en cours mais pas terminée
-    if not _is_initialized or chatbot is None:
-        if request.path == '/health':
-            # Permettre aux health checks de passer
-            return None
-        else:
-            # Pour les autres routes, indiquer que le service est en cours d'initialisation
-            return jsonify({
-                "status": "initializing",
-                "message": "Le service est en cours d'initialisation, veuillez réessayer dans quelques instants"
-            }), 503  # Service Unavailable
+    # Pour les health checks, permettre l'accès même pendant l'initialisation
+    if request.path == '/health':
+        return None
+        
+    # Pour les autres routes, renvoyer un statut d'initialisation en cours
+    return jsonify({
+        "status": "initializing",
+        "message": "Le service est en cours d'initialisation, veuillez réessayer dans quelques instants"
+    }), 503  # Service Unavailable
 # Routes pour la gestion de l'interface utilisateur (pourraient être ajoutées)
 @app.route('/api/stats')
 def get_stats():
