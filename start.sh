@@ -6,12 +6,7 @@ export GIT_LFS_SKIP_SMUDGE=1
 
 # Création du répertoire pour les fichiers volumineux si nécessaire
 mkdir -p Lib/site-packages/lance
-
-# Vérification si lance est présent dans requirements.txt
-if grep -q "lance" requirements.txt; then
-  echo "ATTENTION: Le package lance est requis mais peut ne pas fonctionner sans lance.pyd"
-  # Le déploiement continuera même sans lance.pyd
-fi
+mkdir -p data  # Assurer que le répertoire data existe
 
 # Activer l'environnement virtuel s'il existe
 if [ -d "venv" ]; then
@@ -28,29 +23,35 @@ if ! command -v python &> /dev/null; then
     exit 1
 fi
 
-# Installation des dépendances
+# Installation des dépendances (une seule fois)
 pip install -r requirements.txt
 pip install gunicorn eventlet
 
-# Exécuter les migrations de base de données
+# Exécuter une initialisation simplifiée de la base de données
 echo "Initialisation de la base de données..."
-python init_database.py
-
-# Exécuter l'initialisation de la base de données en Python via un heredoc
 python - <<EOF
-# Importer et exécuter l'initialisation asynchrone de la base de données
-try:
-    from base_de_donnees import init_db  # Importation de la fonction d'initialisation
-    import asyncio
-    asyncio.run(init_db())  # Exécuter la fonction asynchrone
-    print('Base de données initialisée avec succès')
-except Exception as e:
-    print(f"Erreur lors de l'initialisation: {e}")
-    import traceback
-    traceback.print_exc()
-    exit(1)
+import asyncio
+import os
+from pathlib import Path
+
+# Assurer l'existence du répertoire data
+Path('data').mkdir(exist_ok=True)
+
+async def init_db_standalone():
+    try:
+        from base_de_donnees import init_db
+        await init_db()
+        print('Base de données initialisée avec succès')
+    except Exception as e:
+        print(f"Erreur lors de l'initialisation: {e}")
+        import traceback
+        traceback.print_exc()
+
+# Exécution de l'initialisation
+asyncio.run(init_db_standalone())
 EOF
 
 # Démarrer l'application avec Gunicorn
 echo "Démarrage de l'application sur le port ${PORT:-5000}..."
-gunicorn --worker-class gevent -w 1 app:app -b 0.0.0.0:${PORT:-5000}
+# Utiliser --preload pour charger l'application et son contexte avant de créer les workers
+gunicorn --worker-class eventlet --preload -w 1 'app:app' -b 0.0.0.0:${PORT:-5000}

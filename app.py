@@ -47,69 +47,6 @@ def index():
     """Page d'accueil du chatbot"""
     return render_template('index.html')
 
-@app.route('/health')
-def health():
-    """Endpoint de vérification de santé pour Render"""
-    # Vérification de l'état d'initialisation
-    global _is_initialized, _initialization_started
-    
-    if not _initialization_started:
-        status = "starting"
-    elif not _is_initialized:
-        status = "initializing"
-    else:
-        status = "ok"
-    
-    # Stats de base
-    health_stats = {
-        "uptime": time.time() - app.config.get('start_time', time.time()),
-        "requests": stats.get("requests_total", 0),
-        "errors": stats.get("error_count", 0),
-        "avg_response_time": stats.get("avg_response_time", 0),
-        "initialization_status": status
-    }
-    
-    # Vérification plus détaillée seulement si l'initialisation est terminée
-    checks = {
-        "database": _is_initialized,
-        "chatbot": chatbot is not None,
-        "openai": _is_initialized,
-        "qdrant": _is_initialized
-    }
-    
-    try:
-        # Vérification de l'état du cache si disponible et initialisé
-        if _is_initialized and hasattr(global_cache, 'get_stats'):
-            # Utilisation d'un thread pour l'opération async
-            import threading
-            cache_stats = {}
-            
-            def get_cache_stats():
-                nonlocal cache_stats
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    cache_stats = loop.run_until_complete(global_cache.get_stats())
-                finally:
-                    loop.close()
-            
-            # Exécuter de manière non bloquante avec timeout
-            stats_thread = threading.Thread(target=get_cache_stats)
-            stats_thread.daemon = True
-            stats_thread.start()
-            stats_thread.join(timeout=2.0)  # Attendre max 2 secondes
-            
-            if cache_stats:
-                health_stats["cache"] = cache_stats
-    except:
-        checks["cache"] = False
-    
-    return jsonify({
-        "status": status, 
-        "timestamp": datetime.now().isoformat(),
-        "checks": checks,
-        "stats": health_stats
-    })
 
 @socketio.on('connect')
 def handle_connect():
@@ -160,11 +97,13 @@ async def process_message(user_id, message):
     global stats
     
     try:
-        # Gestion de la conversation
-        async with SessionLocal() as db:
-            # Récupération ou création de la conversation
-            result = await db.execute(f"SELECT * FROM conversations WHERE user_id = '{user_id}'")
-            conversation = result.fetchone()
+         # Utilisation explicite du contexte d'application
+        async with app.app_context():
+            # Gestion de la conversation
+            async with SessionLocal() as db:
+                # Récupération ou création de la conversation
+                result = await db.execute(f"SELECT * FROM conversations WHERE user_id = '{user_id}'")
+                conversation = result.fetchone()
             
             if not conversation:
                 # Création d'une nouvelle conversation
@@ -223,6 +162,7 @@ async def process_message(user_id, message):
             'type': 'error',
             'error_id': stats["error_count"]
         }, room=user_id)
+        pass
 
 # Variables globales pour le suivi de l'initialisation
 _is_initialized = False
@@ -278,82 +218,83 @@ def initialize():
         
     app.config['start_time'] = time.time()
     _initialization_started = True
-    
-    try:
-        # Lancer un thread séparé pour l'initialisation asynchrone
-        import threading
-        def async_init():
-            global _db_initialized, _search_factory_initialized, _cache_initialized, _is_initialized, chatbot
-            
-            # Créer une nouvelle boucle pour ce thread
-            new_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(new_loop)
-            try:
-                # Initialisation de la base de données avec timeout
-                try:
-                    new_loop.run_until_complete(
-                        asyncio.wait_for(init_db(), timeout=15.0)
-                    )
-                    _db_initialized = True
-                    logger.info("Base de données initialisée avec succès")
-                except asyncio.TimeoutError:
-                    logger.error("Timeout lors de l'initialisation de la base de données")
-                except Exception as e:
-                    logger.error(f"Erreur lors de l'initialisation de la base de données: {str(e)}")
+    # Utiliser un contexte d'application
+    with app.app_context():
+        try:
+            # Lancer un thread séparé pour l'initialisation asynchrone
+            import threading
+            def async_init():
+                global _db_initialized, _search_factory_initialized, _cache_initialized, _is_initialized, chatbot
                 
-                # Initialisation du search factory avec timeout
+                # Créer une nouvelle boucle pour ce thread
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
                 try:
-                    new_loop.run_until_complete(
-                        asyncio.wait_for(search_factory.initialize(), timeout=15.0)
-                    )
-                    _search_factory_initialized = True
-                    logger.info("Search factory initialisé avec succès")
-                except asyncio.TimeoutError:
-                    logger.error("Timeout lors de l'initialisation du search factory")
-                except Exception as e:
-                    logger.error(f"Erreur lors de l'initialisation du search factory: {str(e)}")
-                
-                # Initialisation du cache avec timeout
-                if hasattr(global_cache, 'start_cleanup_task'):
+                    # Initialisation de la base de données avec timeout
                     try:
                         new_loop.run_until_complete(
-                            asyncio.wait_for(global_cache.start_cleanup_task(), timeout=5.0)
+                            asyncio.wait_for(init_db(), timeout=15.0)
                         )
-                        _cache_initialized = True
-                        logger.info("Cache initialisé avec succès")
+                        _db_initialized = True
+                        logger.info("Base de données initialisée avec succès")
                     except asyncio.TimeoutError:
-                        logger.error("Timeout lors de l'initialisation du cache")
+                        logger.error("Timeout lors de l'initialisation de la base de données")
                     except Exception as e:
-                        logger.error(f"Erreur lors de l'initialisation du cache: {str(e)}")
-                
-                # Initialiser le chatbot seulement si les composants essentiels sont prêts
-                if _db_initialized and _search_factory_initialized:
+                        logger.error(f"Erreur lors de l'initialisation de la base de données: {str(e)}")
+                    
+                    # Initialisation du search factory avec timeout
                     try:
-                        chatbot = ChatBot(
-                            openai_key=os.getenv('OPENAI_API_KEY'),
-                            qdrant_url=os.getenv('QDRANT_URL'),
-                            qdrant_api_key=os.getenv('QDRANT_API_KEY')
+                        new_loop.run_until_complete(
+                            asyncio.wait_for(search_factory.initialize(), timeout=15.0)
                         )
-                        _is_initialized = True
-                        logger.info("Chatbot initialisé avec succès")
+                        _search_factory_initialized = True
+                        logger.info("Search factory initialisé avec succès")
+                    except asyncio.TimeoutError:
+                        logger.error("Timeout lors de l'initialisation du search factory")
                     except Exception as e:
-                        logger.critical(f"Erreur initialisation chatbot: {str(e)}")
-                else:
-                    logger.warning("Chatbot non initialisé - composants nécessaires manquants")
-            except Exception as e:
-                logger.critical(f"Erreur dans le thread d'initialisation: {str(e)}\n{traceback.format_exc()}")
-            finally:
-                new_loop.close()
-        
-        # Démarrer le thread d'initialisation en arrière-plan
-        init_thread = threading.Thread(target=async_init)
-        init_thread.daemon = True
-        init_thread.start()
-        
-        # Retourner immédiatement pour ne pas bloquer les requêtes
-        logger.info("Initialisation démarrée en arrière-plan")
-    except Exception as e:
-        logger.critical(f"Erreur critique d'initialisation: {str(e)}\n{traceback.format_exc()}")
+                        logger.error(f"Erreur lors de l'initialisation du search factory: {str(e)}")
+                    
+                    # Initialisation du cache avec timeout
+                    if hasattr(global_cache, 'start_cleanup_task'):
+                        try:
+                            new_loop.run_until_complete(
+                                asyncio.wait_for(global_cache.start_cleanup_task(), timeout=5.0)
+                            )
+                            _cache_initialized = True
+                            logger.info("Cache initialisé avec succès")
+                        except asyncio.TimeoutError:
+                            logger.error("Timeout lors de l'initialisation du cache")
+                        except Exception as e:
+                            logger.error(f"Erreur lors de l'initialisation du cache: {str(e)}")
+                    
+                    # Initialiser le chatbot seulement si les composants essentiels sont prêts
+                    if _db_initialized and _search_factory_initialized:
+                        try:
+                            chatbot = ChatBot(
+                                openai_key=os.getenv('OPENAI_API_KEY'),
+                                qdrant_url=os.getenv('QDRANT_URL'),
+                                qdrant_api_key=os.getenv('QDRANT_API_KEY')
+                            )
+                            _is_initialized = True
+                            logger.info("Chatbot initialisé avec succès")
+                        except Exception as e:
+                            logger.critical(f"Erreur initialisation chatbot: {str(e)}")
+                    else:
+                        logger.warning("Chatbot non initialisé - composants nécessaires manquants")
+                except Exception as e:
+                    logger.critical(f"Erreur dans le thread d'initialisation: {str(e)}\n{traceback.format_exc()}")
+                finally:
+                    new_loop.close()
+            
+            # Démarrer le thread d'initialisation en arrière-plan
+            init_thread = threading.Thread(target=async_init)
+            init_thread.daemon = True
+            init_thread.start()
+            
+            # Retourner immédiatement pour ne pas bloquer les requêtes
+            logger.info("Initialisation démarrée en arrière-plan")
+        except Exception as e:
+            logger.critical(f"Erreur critique d'initialisation: {str(e)}\n{traceback.format_exc()}")
 
 @app.before_request
 def before_request_func():
@@ -444,7 +385,8 @@ def health():
         "timestamp": datetime.now().isoformat(),
         "checks": components,
         "stats": health_stats
-    })@app.route('/api/stats')
+    })
+@app.route('/api/stats')
 def get_stats():
     """API pour récupérer les statistiques d'utilisation"""
     return jsonify(stats)

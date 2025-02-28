@@ -55,6 +55,8 @@ services:
       # Nouvelle variable pour désactiver Git LFS lors d'éventuelles opérations Git
       - key: GIT_LFS_SKIP_SMUDGE
         value: 1
+      - key: IS_RENDER
+        value: "true"
   
   - type: redis
     name: its-help-cache

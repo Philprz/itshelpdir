@@ -14,10 +14,22 @@ if not os.getenv('DATABASE_URL'):
 if not os.getenv('TIMEOUT_MULTIPLIER'):
     os.environ['TIMEOUT_MULTIPLIER'] = '1.0'
 
-# Exécuter l'initialisation
+# Création du répertoire data si nécessaire
+os.makedirs('data', exist_ok=True)
+
+# Exécuter l'initialisation de façon indépendante
 async def main():
-    await init_db()
-    print("Base de données initialisée avec succès!")
+    try:
+        await init_db()
+        print("Base de données initialisée avec succès!")
+    except Exception as e:
+        print(f"Erreur lors de l'initialisation de la base de données: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    return True
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    success = asyncio.run(main())
+    if not success:
+        exit(1)
