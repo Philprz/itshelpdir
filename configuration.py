@@ -161,6 +161,9 @@ def get_slack_bot(config: Config):
         app_token=config.config["SLACK_APP_TOKEN"], 
         openai_key=config.config["OPENAI_API_KEY"]
     )
+# Dans le fichier configuration.py, modifier la classe GlobalCache 
+# en ajoutant une méthode d'initialisation qui ne dépend pas du contexte Flask
+
 class GlobalCache:
     """Cache global partagé entre toutes les instances avec gestion de la mémoire."""
     
@@ -174,11 +177,13 @@ class GlobalCache:
         self._total_memory = 0
         self._max_memory = 100 * 1024 * 1024  # 100MB par défaut
         self._cleanup_task = None
+        self._initialized = False
         
     async def start_cleanup_task(self):
         """Démarre une tâche périodique de nettoyage du cache."""
         if self._cleanup_task is None:
             self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+            self._initialized = True
         
     async def _periodic_cleanup(self):
         """Nettoie périodiquement les entrées expirées."""
@@ -234,6 +239,12 @@ class GlobalCache:
             
     async def get(self, key, namespace="default"):
         """Récupère une valeur du cache avec namespace."""
+        if not self._initialized:
+            try:
+                await self.start_cleanup_task()
+            except Exception as e:
+                logger.warning(f"Erreur initialisation cache lors de get(): {e}")
+                
         full_key = f"{namespace}:{key}"
         async with self._lock:
             if full_key not in self._cache:
@@ -249,6 +260,12 @@ class GlobalCache:
             
     async def set(self, key, value, namespace="default"):
         """Stocke une valeur dans le cache avec namespace."""
+        if not self._initialized:
+            try:
+                await self.start_cleanup_task()
+            except Exception as e:
+                logger.warning(f"Erreur initialisation cache lors de set(): {e}")
+                
         full_key = f"{namespace}:{key}"
         async with self._lock:
             # Si la clé existe déjà, on la supprime d'abord
@@ -285,7 +302,23 @@ class GlobalCache:
             self._access_times[full_key] = time.monotonic()
             self._size_tracker[full_key] = size
             self._total_memory += size
-            
+    def _estimate_size(self, value):
+        """Estime la taille mémoire d'un objet."""
+        if isinstance(value, list) and len(value) > 0:
+            # Pour les embeddings (listes de floats)
+            if isinstance(value[0], float):
+                return len(value) * 8  # 8 octets par float
+            # Pour les listes d'autres types
+            return sum(sys.getsizeof(item) for item in value[:10]) * (len(value) / 10)
+        elif isinstance(value, dict):
+            # Estimation pour les dictionnaires
+            sample_size = min(10, len(value))
+            if sample_size > 0:
+                sample_keys = list(value.keys())[:sample_size]
+                avg_size = sum(sys.getsizeof(k) + sys.getsizeof(value[k]) for k in sample_keys) / sample_size
+                return avg_size * len(value)
+        return sys.getsizeof(value)
+
     async def invalidate(self, pattern="*", namespace="default"):
         """Invalide les entrées correspondant au motif dans le namespace."""
         import fnmatch

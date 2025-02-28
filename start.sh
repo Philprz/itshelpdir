@@ -71,5 +71,5 @@ EOF
 
 # Démarrer l'application avec Gunicorn
 echo "Démarrage de l'application sur le port ${PORT:-5000}..."
-# Utilisation de gevent comme worker class
-gunicorn --worker-class gevent --preload -w 1 'app:app' -b 0.0.0.0:${PORT:-5000}
+# Utilisation de gevent comme worker class, SANS préchargement
+gunicorn --worker-class gevent -w 1 'app:app' -b 0.0.0.0:${PORT:-5000}
