@@ -262,12 +262,21 @@ def clean_text(text):
     return re.sub(r'[^a-zA-Z0-9\s]', '', str(text))
 
 async def init_db():
-    async with engine.begin() as conn:
-        # Suppression de toutes les tables si elles existent
-        await conn.run_sync(Base.metadata.drop_all)
-        # Création de toutes les tables définies
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database initialization complete.")
+    try:
+        async with engine.begin() as conn:
+            # Vérifier si les tables existent déjà
+            tables_existent = await conn.run_sync(lambda sync_conn: sync_conn.dialect.has_table(sync_conn, 'clients'))
+            
+            if not tables_existent:
+                # Création de toutes les tables définies seulement si elles n'existent pas
+                await conn.run_sync(Base.metadata.create_all)
+                logger.info("Database initialization complete.")
+            else:
+                logger.info("Database tables already exist. Skipping initialization.")
+    except Exception as e:
+        logger.error(f"Error during database initialization: {str(e)}")
+        # Ne pas lever d'exception pour permettre au service de démarrer même 
+        # si la base de données n'est pas prête
 def create_sqlite_functions(conn):
     def normalize_string(s):
         if s is None:
