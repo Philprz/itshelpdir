@@ -7,13 +7,10 @@ export GIT_LFS_SKIP_SMUDGE=1
 # Création du répertoire pour les fichiers volumineux si nécessaire
 mkdir -p Lib/site-packages/lance
 
-# URL vers un stockage externe (à remplacer par l'URL réelle)
-LANCE_PYD_URL="https://example-storage.com/path/to/lance.pyd"
-
-# Téléchargement du fichier lance.pyd depuis un stockage externe si nécessaire
-if [ ! -f "Lib/site-packages/lance/lance.pyd" ]; then
-    echo "Téléchargement de lance.pyd..."
-    curl -L "$LANCE_PYD_URL" -o "Lib/site-packages/lance/lance.pyd" || echo "AVERTISSEMENT: Impossible de télécharger lance.pyd"
+# Vérification si lance est présent dans requirements.txt
+if grep -q "lance" requirements.txt; then
+  echo "ATTENTION: Le package lance est requis mais peut ne pas fonctionner sans lance.pyd"
+  # Le déploiement continuera même sans lance.pyd
 fi
 
 # Activer l'environnement virtuel s'il existe
