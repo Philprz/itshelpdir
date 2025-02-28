@@ -8,8 +8,10 @@ services:
       rm -rf ./* ./.[!.]*
       # Téléchargement direct des fichiers sans utiliser Git LFS
       curl -L https://github.com/Philprz/itshelpdir/archive/main.tar.gz | tar xz --strip-components=1
-      # Installation des dépendances une fois le code récupéré
-      pip install -r requirements.txt
+      # Installation explicite de Flask et autres dépendances critiques
+      #pip install Flask Flask-SocketIO Flask-Cors
+      # Installation des autres dépendances
+      #pip install -r requirements.txt
     startCommand: ./start.sh
     runtime: python
     plan: free

@@ -27,9 +27,21 @@ fi
 # Si oui, installer les dépendances, sinon elles sont déjà installées par Render
 if [ -z "$IS_RENDER" ]; then
     # Installation des dépendances seulement en développement local
-    if ! python -c "import gevent" &> /dev/null; then
+    echo "Vérification des dépendances essentielles..."
+    
+    # Vérifier l'installation de Flask
+    if ! python -c "import flask" &> /dev/null; then
+        echo "Installation de Flask et ses dépendances..."
+        pip install -r requirements.txt
+    elif ! python -c "import gevent" &> /dev/null; then
         echo "Installation de gevent..."
         pip install gevent
+    fi
+else
+    # Même en environnement Render, vérifier si Flask est installé
+    if ! python -c "import flask" &> /dev/null; then
+        echo "Installation des dépendances manquantes sur Render..."
+        pip install -r requirements.txt
     fi
 fi
 
