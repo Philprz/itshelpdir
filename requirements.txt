@@ -15,7 +15,7 @@ grpcio-tools==1.70.0
 gunicorn==20.1.0
 h11==0.14.0
 h2==4.2.0
-hpack==4.0.0
+hpack
 httpcore==1.0.7
 httpx==0.28.1
 hyperframe==6.1.0
