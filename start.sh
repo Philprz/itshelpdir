@@ -24,8 +24,8 @@ if ! command -v python &> /dev/null; then
 fi
 
 # Installation des dépendances (une seule fois)
-pip install -r requirements.txt
-pip install gunicorn eventlet
+#pip install -r requirements.txt
+#pip install gunicorn eventlet
 
 # Exécuter une initialisation simplifiée de la base de données
 echo "Initialisation de la base de données..."
