@@ -23,9 +23,15 @@ if ! command -v python &> /dev/null; then
     exit 1
 fi
 
-# Installation des dépendances (une seule fois)
-#pip install -r requirements.txt
-#pip install gunicorn eventlet
+# Vérifier si nous sommes en environnement de développement local
+# Si oui, installer les dépendances, sinon elles sont déjà installées par Render
+if [ -z "$IS_RENDER" ]; then
+    # Installation des dépendances seulement en développement local
+    if ! python -c "import gevent" &> /dev/null; then
+        echo "Installation de gevent..."
+        pip install gevent
+    fi
+fi
 
 # Exécuter une initialisation simplifiée de la base de données
 echo "Initialisation de la base de données..."
@@ -53,5 +59,5 @@ EOF
 
 # Démarrer l'application avec Gunicorn
 echo "Démarrage de l'application sur le port ${PORT:-5000}..."
-# Utiliser --preload pour charger l'application et son contexte avant de créer les workers
-gunicorn --worker-class eventlet --preload -w 1 'app:app' -b 0.0.0.0:${PORT:-5000}
+# Utilisation de gevent comme worker class
+gunicorn --worker-class gevent --preload -w 1 'app:app' -b 0.0.0.0:${PORT:-5000}
