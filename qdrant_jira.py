@@ -882,7 +882,7 @@ class BaseQdrantSearch:
                     collection_name=self.collection_name,
                     query_vector=vector,
                     query_filter=query_filter,
-                    limit=500
+                    limit=[500]
                 )
                 return [r for r in results if hasattr(r, 'score') and r.score >= 0.45]
         except asyncio.TimeoutError:
@@ -1032,8 +1032,7 @@ class QdrantJiraSearch(BaseQdrantSearch):
                         if (date_debut and created_date < date_debut) or (date_fin and created_date > date_fin):
                             continue
 
-                    # 🔍 Hash du contenu pour la déduplication
-                    content_hash = hashlib.md5(str(payload.get('content', '')).encode()).hexdigest()
+                    
                     # Hachage plus robuste prenant en compte plusieurs champs pertinents
                     content = str(payload.get('content', '') or '')
                     summary = str(payload.get('summary', '') or '')

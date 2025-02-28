@@ -1,1 +1,2 @@
 itshelpdir/Lib/site-packages/lance/lance.pyd filter=lfs diff=lfs merge=lfs -text
+Lib/site-packages/lance/lance.pyd -filter=lfs -diff=lfs -merge=lfs -text

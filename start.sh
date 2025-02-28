@@ -1,6 +1,21 @@
 #!/bin/bash
 set -e  # Arrêt en cas d'erreur
 
+# Configuration pour contourner les problèmes de Git LFS
+export GIT_LFS_SKIP_SMUDGE=1
+
+# Création du répertoire pour les fichiers volumineux si nécessaire
+mkdir -p Lib/site-packages/lance
+
+# URL vers un stockage externe (à remplacer par l'URL réelle)
+LANCE_PYD_URL="https://example-storage.com/path/to/lance.pyd"
+
+# Téléchargement du fichier lance.pyd depuis un stockage externe si nécessaire
+if [ ! -f "Lib/site-packages/lance/lance.pyd" ]; then
+    echo "Téléchargement de lance.pyd..."
+    curl -L "$LANCE_PYD_URL" -o "Lib/site-packages/lance/lance.pyd" || echo "AVERTISSEMENT: Impossible de télécharger lance.pyd"
+fi
+
 # Activer l'environnement virtuel s'il existe
 if [ -d "venv" ]; then
     source venv/bin/activate

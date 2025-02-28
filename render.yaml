@@ -2,7 +2,14 @@ services:
   - type: web
     name: its-help-chatbot
     env: python
-    buildCommand: pip install -r requirements.txt
+    # Commandes modifiées pour contourner les problèmes Git LFS
+    buildCommand: |
+      # Nettoyage complet du répertoire de destination
+      rm -rf ./* ./.[!.]*
+      # Téléchargement direct des fichiers sans utiliser Git LFS
+      curl -L https://github.com/Philprz/itshelpdir/archive/main.tar.gz | tar xz --strip-components=1
+      # Installation des dépendances une fois le code récupéré
+      pip install -r requirements.txt
     startCommand: ./start.sh
     runtime: python
     plan: free
@@ -45,6 +52,9 @@ services:
         value: 2000
       - key: MAX_SEARCH_RESULTS
         value: 5
+      # Nouvelle variable pour désactiver Git LFS lors d'éventuelles opérations Git
+      - key: GIT_LFS_SKIP_SMUDGE
+        value: 1
   
   - type: redis
     name: its-help-cache

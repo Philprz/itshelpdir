@@ -54,16 +54,6 @@ class EmbeddingService:
         return True
     
     async def get_embedding(self, text: str, force_refresh=False) -> Optional[List[float]]:
-        """
-        Génère un embedding avec gestion optimisée du cache et des erreurs.
-        
-        Args:
-            text: Texte à transformer en embedding
-            force_refresh: Force la régénération même si présent en cache
-            
-        Returns:
-            Liste des valeurs de l'embedding ou None en cas d'erreur
-        """
         # Vérification du cache L1 (plus rapide)
         cache_key = self._get_cache_key(text)
         if not force_refresh and cache_key in self.l1_cache:
@@ -77,7 +67,6 @@ class EmbeddingService:
             if cached_vector:
                 # Mise à jour du cache L1
                 if len(self.l1_cache) >= self.l1_cache_max_size:
-                    # Suppression de l'entrée la plus ancienne
                     oldest_key = min(self.l1_cache_timestamps, key=self.l1_cache_timestamps.get)
                     del self.l1_cache[oldest_key]
                     del self.l1_cache_timestamps[oldest_key]
