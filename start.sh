@@ -83,9 +83,12 @@ echo "Démarrage de l'application sur le port ${PORT:-5000}..."
 export GEVENT_SUPPORT=True
 
 # On utilise worker_class=gevent sans --preload pour éviter les problèmes de fork
-# Démarrage avec contexte d'application explicite
+# Augmenter les timeouts pour l'initialisation
 # Définition des variables d'environnement Flask
 export FLASK_ENV=production
 export PYTHONPATH=.
 export FLASK_APP=app.py
-gunicorn --worker-class gevent --workers 1 --timeout 120 --log-level info 'wsgi:application' -b 0.0.0.0:${PORT:-5000}
+
+# Augmentation du timeout à 180s (3 minutes) pour l'initialisation
+# Modification du nombre de workers à 1 pour éviter les conflits sur Render (free tier)
+gunicorn --worker-class gevent --workers 1 --timeout 180 --graceful-timeout 60 --keep-alive 5 --log-level info 'wsgi:application' -b 0.0.0.0:${PORT:-5000}

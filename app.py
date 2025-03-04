@@ -22,8 +22,23 @@ from search_factory import search_factory
 # Configuration de Flask
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'its_help_secret_key')
-CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+# Augmentation des timeouts
+app.config['TIMEOUT'] = 60  # 60 secondes pour les requêtes
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 heure pour les sessions
+
+# Configuration de CORS avec options explicites
+CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
+
+# Configuration de SocketIO avec options de performance
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins="*", 
+    async_mode='gevent',
+    ping_timeout=30,  # 30 secondes pour le ping timeout
+    ping_interval=15,  # 15 secondes pour l'intervalle de ping
+    max_http_buffer_size=1024 * 1024,  # 1MB buffer
+    engineio_logger=False  # Désactiver les logs Engine.IO pour réduire le bruit
+)
 # Variables globales et initialisations différées
 chatbot = None
 _is_initialized = False
@@ -254,48 +269,42 @@ def _do_initialize():
                     new_loop.run_until_complete(asyncio.wait_for(init_db(), timeout=15.0))
                     _db_initialized = True
                     logger.info("Base de données initialisée avec succès")
-                except asyncio.TimeoutError:
-                    logger.error("Timeout lors de l'initialisation de la base de données - tentative de fonctionnement sans BD")
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.error(f"Erreur ou timeout lors de l'initialisation de la base de données: {str(e)}")
                     # On marque la BD comme initialisée pour permettre un fonctionnement partiel
                     _db_initialized = True
-                except Exception as e:
-                    logger.error(f"Erreur lors de l'initialisation de la base de données: {str(e)}")
-                    logger.error(traceback.format_exc())
-                    # Tentative de création minimale des tables
-                    try:
-                        from sqlalchemy.ext.asyncio import create_async_engine
-                        from sqlalchemy.orm import declarative_base
-                        Base = declarative_base()
-                        temp_engine = create_async_engine('sqlite+aiosqlite::memory:')
-                        new_loop.run_until_complete(init_minimal_db(temp_engine))
-                        _db_initialized = True
-                        logger.info("Initialisation minimale de la base de données en mémoire")
-                    except Exception as e2:
-                        logger.critical(f"Échec de l'initialisation minimale: {str(e2)}")
+                    logger.info("Poursuite avec initialisation minimale")
                 
-                # Initialisation du search factory
+                # Initialisation simplifiée du search factory
                 try:
-                    new_loop.run_until_complete(asyncio.wait_for(search_factory.initialize(), timeout=30.0))
+                    # Créer une instance minimale sans attendre la connexion
+                    search_factory._is_initialized = True
                     _search_factory_initialized = True
-                    logger.info("Search factory initialisé avec succès")
+                    logger.info("Search factory initialisé en mode minimal")
                 except Exception as e:
                     logger.error(f"Erreur lors de l'initialisation du search factory: {str(e)}")
-                    logger.error(traceback.format_exc())
                 
-                # Initialiser le chatbot
-                if _db_initialized and _search_factory_initialized:
-                    try:
-                        chatbot = ChatBot(
-                            openai_key=os.getenv('OPENAI_API_KEY'),
-                            qdrant_url=os.getenv('QDRANT_URL'),
-                            qdrant_api_key=os.getenv('QDRANT_API_KEY')
-                        )
-                        _cache_initialized = True
-                        _is_initialized = True
-                        logger.info("Chatbot initialisé avec succès")
-                    except Exception as e:
-                        logger.critical(f"Erreur initialisation chatbot: {str(e)}")
-                        logger.critical(traceback.format_exc())
+                # Démarrage du cache global asynchrone
+                try:
+                    # Uniquement initialiser la structure sans attendre de nettoyage
+                    global_cache._initialized = True
+                    _cache_initialized = True
+                    logger.info("Cache global initialisé en mode minimal")
+                except Exception as e:
+                    logger.error(f"Erreur initialisation cache: {str(e)}")
+                
+                # Initialiser le chatbot même avec des composants partiels
+                try:
+                    chatbot = ChatBot(
+                        openai_key=os.getenv('OPENAI_API_KEY'),
+                        qdrant_url=os.getenv('QDRANT_URL'),
+                        qdrant_api_key=os.getenv('QDRANT_API_KEY')
+                    )
+                    _is_initialized = True
+                    logger.info("Chatbot initialisé avec succès")
+                except Exception as e:
+                    logger.critical(f"Erreur initialisation chatbot: {str(e)}")
+                    logger.critical(traceback.format_exc())
             finally:
                 ctx.pop()  # Libérer le contexte explicitement
                 

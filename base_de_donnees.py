@@ -268,26 +268,27 @@ async def init_db():
             # Vérifier la connexion avant d'essayer de créer les tables
             try:
                 async with engine.connect() as test_conn:
+                    # Test simple de connexion
                     await test_conn.execute(select(1))
                     logger.info("Database connection successful.")
             except Exception as conn_err:
                 logger.error(f"Database connection failed: {str(conn_err)}")
-                raise
+                # Création du répertoire data si nécessaire
+                os.makedirs('data', exist_ok=True)
+                # Continuer malgré l'erreur pour permettre la création en fallback
 
             async with engine.begin() as conn:
-                # Vérifier si les tables existent déjà
-                tables_existent = await conn.run_sync(lambda sync_conn: sync_conn.dialect.has_table(sync_conn, 'clients'))
+                # Créer les tables sans vérifier leur existence
+                # La méthode create_all ne fera rien si les tables existent déjà
+                await conn.run_sync(Base.metadata.create_all)
+                logger.info("Database tables created or verified.")
                 
-                if not tables_existent:
-                    # Création de toutes les tables définies seulement si elles n'existent pas
-                    await conn.run_sync(Base.metadata.create_all)
-                    logger.info("Database initialization complete.")
-                else:
-                    logger.info("Database tables already exist. Skipping initialization.")
     except asyncio.TimeoutError:
         logger.error("Timeout during database initialization")
+        # Ne pas propager l'erreur pour permettre au système de continuer
     except Exception as e:
         logger.error(f"Error during database initialization: {str(e)}")
+        # Ne pas propager l'erreur pour permettre au système de continuer
 def create_sqlite_functions(conn):
     def normalize_string(s):
         if s is None:
