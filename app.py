@@ -117,12 +117,15 @@ def handle_message(data):
                 'type': 'error'
             })
         return
-    
+    # Lancer le wrapper en tâche de fond
+    socketio.start_background_task(run_process_message, user_id, message)
     # Envoi d'un accusé de réception
     emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
     
-    # Traitement asynchrone du message
-    socketio.start_background_task(process_message, user_id, message)
+def run_process_message(user_id, message):
+    # Utilisation d'asyncio.run pour lancer la coroutine dans une nouvelle boucle
+    asyncio.run(process_message(user_id, message))
+
 
 # Correction pour la fonction process_message dans app.py
 
