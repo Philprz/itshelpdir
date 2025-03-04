@@ -4,10 +4,6 @@ set -e  # Arrêt en cas d'erreur
 # Configuration pour contourner les problèmes de Git LFS
 export GIT_LFS_SKIP_SMUDGE=1
 
-# Définition des variables d'environnement Flask
-export FLASK_APP=app.py
-export FLASK_ENV=production
-
 # Création du répertoire pour les fichiers volumineux si nécessaire
 mkdir -p Lib/site-packages/lance
 mkdir -p data  # Assurer que le répertoire data existe
@@ -92,4 +88,9 @@ echo "Démarrage de l'application sur le port ${PORT:-5000}..."
 export GEVENT_SUPPORT=True
 
 # On utilise worker_class=gevent sans --preload pour éviter les problèmes de fork
-PYTHONPATH=. gunicorn --worker-class gevent --workers 1 --timeout 120 --log-level info 'app:app' -b 0.0.0.0:${PORT:-5000}
+# Démarrage avec contexte d'application explicite
+# Définition des variables d'environnement Flask
+export FLASK_ENV=production
+export PYTHONPATH=.
+export FLASK_APP=app.py
+gunicorn --worker-class gevent --workers 1 --timeout 120 --log-level info 'app:app' -b 0.0.0.0:${PORT:-5000} --preload

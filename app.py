@@ -46,28 +46,7 @@ stats = {
     "avg_response_time": 0,
     "last_errors": []
 }
-# Ajout d'une fonction d'initialisation explicite
-@app.before_request
-def before_request_func():
-    global _is_initialized, _initialization_started, chatbot
-    global _db_initialized, _search_factory_initialized
 
-    # Pour les health checks, permettre l'accès même pendant l'initialisation
-    if request.path == '/health':
-        return None
-        
-    # Si déjà initialisé, continuer normalement
-    if _is_initialized and chatbot is not None:
-        return None
-        
-    # Si l'initialisation n'a pas encore commencé, la démarrer
-    if not _initialization_started:
-        with app.app_context():
-            initialize()
-        return jsonify({
-            "status": "starting",
-            "message": "Le service démarre, veuillez réessayer dans quelques instants"
-        }), 503  # Service Unavailable
 # Décorateur pour les routes asynchrones
 def async_route(f):
     """Décorateur pour les routes asynchrones"""
@@ -244,10 +223,16 @@ def initialize():
         return
         
     # S'assurer qu'on est dans un contexte d'application Flask
-    if not app.config.get('ENV'):  # Si nous sommes hors du contexte d'application
-        logger.warning("Tentative d'initialisation hors contexte d'application. Reportée.")
-        return
+    if not current_app:  # Si nous sommes hors du contexte d'application
+        with app.app_context():  # Créer un contexte d'application
+            _do_initialize()
+    else:
+        _do_initialize()
         
+def _do_initialize():
+    """Effectue l'initialisation réelle dans un contexte d'application"""
+    global chatbot, _is_initialized, _initialization_started
+    
     app.config['start_time'] = time.time()
     _initialization_started = True
     
