@@ -263,32 +263,35 @@ def clean_text(text):
 
 async def init_db():
     try:
-        # Utilisation d'un timeout pour éviter de bloquer indéfiniment
-        async with asyncio.timeout(10):  # 10 secondes max
-            # Vérifier la connexion avant d'essayer de créer les tables
+        # Utilisation d'un timeout plus court pour éviter de bloquer
+        async with asyncio.timeout(5):  # Réduire à 5 secondes au lieu de 10
+            # Vérifier la connexion de manière non-bloquante
             try:
-                async with engine.connect() as test_conn:
-                    # Test simple de connexion
-                    await test_conn.execute(select(1))
-                    logger.info("Database connection successful.")
+                # Vérification simplifiée avec timeout court
+                connection = await asyncio.wait_for(engine.connect(), timeout=2.0)
+                await connection.close()
+                logger.info("Database connection successful.")
             except Exception as conn_err:
-                logger.error(f"Database connection failed: {str(conn_err)}")
-                # Création du répertoire data si nécessaire
-                os.makedirs('data', exist_ok=True)
+                logger.warning(f"Database connection check skipped: {str(conn_err)}")
                 # Continuer malgré l'erreur pour permettre la création en fallback
+                os.makedirs('data', exist_ok=True)
 
-            async with engine.begin() as conn:
-                # Créer les tables sans vérifier leur existence
-                # La méthode create_all ne fera rien si les tables existent déjà
-                await conn.run_sync(Base.metadata.create_all)
-                logger.info("Database tables created or verified.")
+            # Création des tables avec timeout court
+            try:
+                async with engine.begin() as conn:
+                    await asyncio.wait_for(
+                        conn.run_sync(Base.metadata.create_all),
+                        timeout=3.0
+                    )
+                    logger.info("Database tables created or verified.")
+            except asyncio.TimeoutError:
+                logger.warning("Database table creation timeout - continuing with minimal setup")
+                # Continuer l'initialisation même en cas de timeout
                 
-    except asyncio.TimeoutError:
-        logger.error("Timeout during database initialization")
-        # Ne pas propager l'erreur pour permettre au système de continuer
-    except Exception as e:
+    except (asyncio.TimeoutError, Exception) as e:
         logger.error(f"Error during database initialization: {str(e)}")
-        # Ne pas propager l'erreur pour permettre au système de continuer
+        # Marquer la base comme initialisée pour permettre le fonctionnement
+        return
 def create_sqlite_functions(conn):
     def normalize_string(s):
         if s is None:

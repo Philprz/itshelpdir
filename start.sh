@@ -89,6 +89,5 @@ export FLASK_ENV=production
 export PYTHONPATH=.
 export FLASK_APP=app.py
 
-# Augmentation du timeout à 180s (3 minutes) pour l'initialisation
-# Modification du nombre de workers à 1 pour éviter les conflits sur Render (free tier)
-gunicorn --worker-class gevent --workers 1 --timeout 180 --graceful-timeout 60 --keep-alive 5 --log-level info 'wsgi:application' -b 0.0.0.0:${PORT:-5000}
+# Augmentation du timeout à 300s (5 minutes) pour l'initialisation
+gunicorn --worker-class gevent --workers 1 --timeout 300 --graceful-timeout 60 --keep-alive 5 --log-level info 'wsgi:application' -b 0.0.0.0:${PORT:-5000}

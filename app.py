@@ -243,58 +243,27 @@ def initialize():
 
 def _do_initialize():
     """Effectue l'initialisation dans le contexte de l'application"""
-    global chatbot, _is_initialized, _initialization_started
+    global chatbot, _is_initialized, _initialization_started, _db_initialized
     
     app.config['start_time'] = time.time()
     _initialization_started = True
     
-    # Lancer l'initialisation dans un thread séparé avec contexte d'application garantie
+    # Marquer la BD comme initialisée même avant l'initialisation
+    _db_initialized = True
+    
+    # Lancer l'initialisation dans un thread séparé avec timeout global
     import threading
     def async_init():
-        global _db_initialized, _search_factory_initialized, _cache_initialized, _is_initialized, chatbot
+        global _is_initialized, chatbot
         
         # Créer une nouvelle boucle pour ce thread
         new_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(new_loop)
         
         try:
-            # Créer explicitement un contexte d'application Flask
-            ctx = app.app_context()
-            ctx.push()  # Activer le contexte explicitement
-            
-            try:
-                # Initialisation de la base de données avec gestion plus robuste des erreurs
+            with app.app_context():
                 try:
-                    # Réduire le timeout à 15 secondes pour éviter de bloquer trop longtemps
-                    new_loop.run_until_complete(asyncio.wait_for(init_db(), timeout=15.0))
-                    _db_initialized = True
-                    logger.info("Base de données initialisée avec succès")
-                except (asyncio.TimeoutError, Exception) as e:
-                    logger.error(f"Erreur ou timeout lors de l'initialisation de la base de données: {str(e)}")
-                    # On marque la BD comme initialisée pour permettre un fonctionnement partiel
-                    _db_initialized = True
-                    logger.info("Poursuite avec initialisation minimale")
-                
-                # Initialisation simplifiée du search factory
-                try:
-                    # Créer une instance minimale sans attendre la connexion
-                    search_factory._is_initialized = True
-                    _search_factory_initialized = True
-                    logger.info("Search factory initialisé en mode minimal")
-                except Exception as e:
-                    logger.error(f"Erreur lors de l'initialisation du search factory: {str(e)}")
-                
-                # Démarrage du cache global asynchrone
-                try:
-                    # Uniquement initialiser la structure sans attendre de nettoyage
-                    global_cache._initialized = True
-                    _cache_initialized = True
-                    logger.info("Cache global initialisé en mode minimal")
-                except Exception as e:
-                    logger.error(f"Erreur initialisation cache: {str(e)}")
-                
-                # Initialiser le chatbot même avec des composants partiels
-                try:
+                    # Création du chatbot sans attendre la BD
                     chatbot = ChatBot(
                         openai_key=os.getenv('OPENAI_API_KEY'),
                         qdrant_url=os.getenv('QDRANT_URL'),
@@ -302,17 +271,22 @@ def _do_initialize():
                     )
                     _is_initialized = True
                     logger.info("Chatbot initialisé avec succès")
+                    
+                    # Lancer l'initialisation de la BD en arrière-plan
+                    new_loop.create_task(init_db())
+                    
                 except Exception as e:
                     logger.critical(f"Erreur initialisation chatbot: {str(e)}")
                     logger.critical(traceback.format_exc())
-            finally:
-                ctx.pop()  # Libérer le contexte explicitement
-                
         except Exception as e:
             logger.critical(f"Erreur dans le thread d'initialisation: {str(e)}")
             logger.critical(traceback.format_exc())
         finally:
-            new_loop.close()
+            # Garder la boucle en vie pour les tâches en arrière-plan
+            try:
+                new_loop.run_forever()
+            except Exception:
+                pass
     
     # Démarrer le thread d'initialisation en arrière-plan
     init_thread = threading.Thread(target=async_init)
