@@ -1,4 +1,4 @@
-# Remplacer app.py
+# app.py
 
 import os
 import json
@@ -33,7 +33,7 @@ CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
 socketio = SocketIO(
     app, 
     cors_allowed_origins="*", 
-    async_mode='gevent',
+    async_mode='asyncio',
     ping_timeout=30,  # 30 secondes pour le ping timeout
     ping_interval=15,  # 15 secondes pour l'intervalle de ping
     max_http_buffer_size=1024 * 1024,  # 1MB buffer
@@ -93,30 +93,19 @@ def handle_disconnect():
     logger.info(f"Client déconnecté: {request.sid}")
 
 @socketio.on('message')
-def handle_message(data):
-    """Gestion des messages entrants via SocketIO"""
-    global chatbot, stats
-    stats["requests_total"] += 1
-    
+async def handle_message(data):
+    # Traitement asynchrone direct
     user_id = data.get('user_id', request.sid)
     message = data.get('message', '')
-    
-    # Si le chatbot n'est pas encore initialisé
     if not chatbot:
-        # Vérifier si l'initialisation est en cours
-        if _initialization_started and not _is_initialized:
-            emit('response', {
-                'message': 'Le service est en cours d\'initialisation, veuillez patienter quelques instants...',
-                'type': 'status',
-                'initializing': True
-            })
-        else:
-            # Problème d'initialisation
-            emit('response', {
-                'message': 'Le chatbot n\'est pas initialisé correctement. Veuillez contacter l\'administrateur.',
-                'type': 'error'
-            })
+        await emit('response', {
+            'message': 'Le service est en cours d\'initialisation, veuillez patienter quelques instants...',
+            'type': 'status',
+            'initializing': True
+        })
         return
+    await process_message(user_id, message)
+    await emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
     # Lancer le wrapper en tâche de fond
     socketio.start_background_task(run_process_message, user_id, message)
     # Envoi d'un accusé de réception
