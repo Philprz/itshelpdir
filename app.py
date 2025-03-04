@@ -230,13 +230,13 @@ def initialize():
         _do_initialize()
         
 def _do_initialize():
-    """Effectue l'initialisation réelle dans un contexte d'application"""
+    """Effectue l'initialisation dans le contexte de l'application"""
     global chatbot, _is_initialized, _initialization_started
     
     app.config['start_time'] = time.time()
     _initialization_started = True
     
-    # Lancer un thread séparé pour l'initialisation asynchrone
+    # Lancer l'initialisation dans un thread séparé avec contexte d'application garantie
     import threading
     def async_init():
         global _db_initialized, _search_factory_initialized, _cache_initialized, _is_initialized, chatbot
@@ -246,25 +246,30 @@ def _do_initialize():
         asyncio.set_event_loop(new_loop)
         
         try:
-            # Utiliser le contexte de l'application pour l'initialisation
-            with app.app_context():
+            # Créer explicitement un contexte d'application Flask
+            ctx = app.app_context()
+            ctx.push()  # Activer le contexte explicitement
+            
+            try:
                 # Initialisation de la base de données
                 try:
-                    new_loop.run_until_complete(asyncio.wait_for(init_db(), timeout=15.0))
+                    new_loop.run_until_complete(asyncio.wait_for(init_db(), timeout=30.0))
                     _db_initialized = True
                     logger.info("Base de données initialisée avec succès")
                 except Exception as e:
                     logger.error(f"Erreur lors de l'initialisation de la base de données: {str(e)}")
+                    logger.error(traceback.format_exc())
                 
                 # Initialisation du search factory
                 try:
-                    new_loop.run_until_complete(asyncio.wait_for(search_factory.initialize(), timeout=15.0))
+                    new_loop.run_until_complete(asyncio.wait_for(search_factory.initialize(), timeout=30.0))
                     _search_factory_initialized = True
                     logger.info("Search factory initialisé avec succès")
                 except Exception as e:
                     logger.error(f"Erreur lors de l'initialisation du search factory: {str(e)}")
+                    logger.error(traceback.format_exc())
                 
-                # Initialiser le chatbot seulement si les composants essentiels sont prêts
+                # Initialiser le chatbot
                 if _db_initialized and _search_factory_initialized:
                     try:
                         chatbot = ChatBot(
@@ -272,14 +277,18 @@ def _do_initialize():
                             qdrant_url=os.getenv('QDRANT_URL'),
                             qdrant_api_key=os.getenv('QDRANT_API_KEY')
                         )
-                        # L'initialisation du cache se fera plus tard, sur demande
                         _cache_initialized = True
                         _is_initialized = True
                         logger.info("Chatbot initialisé avec succès")
                     except Exception as e:
                         logger.critical(f"Erreur initialisation chatbot: {str(e)}")
+                        logger.critical(traceback.format_exc())
+            finally:
+                ctx.pop()  # Libérer le contexte explicitement
+                
         except Exception as e:
             logger.critical(f"Erreur dans le thread d'initialisation: {str(e)}")
+            logger.critical(traceback.format_exc())
         finally:
             new_loop.close()
     
@@ -287,9 +296,7 @@ def _do_initialize():
     init_thread = threading.Thread(target=async_init)
     init_thread.daemon = True
     init_thread.start()
-    
-    # Retourner immédiatement pour ne pas bloquer les requêtes
-    logger.info("Initialisation démarrée en arrière-plan")
+    logger.info("Thread d'initialisation démarré")
 
 @app.before_request
 def before_request_func():

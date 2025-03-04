@@ -58,27 +58,11 @@ if ! python -c "import base_de_donnees" &> /dev/null; then
 fi
 
 python - <<EOF
-import asyncio
-import os
 from pathlib import Path
 
-# Assurer l'existence du répertoire data
+# Assurer l'existence des répertoires nécessaires
 Path('data').mkdir(exist_ok=True)
-
-async def init_db_standalone():
-    try:
-        from base_de_donnees import init_db
-        await init_db()
-        print('Base de données initialisée avec succès')
-    except Exception as e:
-        print(f"Erreur lors de l'initialisation: {e}")
-        import traceback
-        traceback.print_exc()
-        # Ne pas quitter avec erreur pour permettre au serveur de démarrer quand même
-        # et de gérer l'initialisation via Flask
-
-# Exécution de l'initialisation
-asyncio.run(init_db_standalone())
+print('Répertoires vérifiés, l\'initialisation de la base sera effectuée au démarrage')
 EOF
 
 # Démarrer l'application avec Gunicorn
@@ -93,4 +77,4 @@ export GEVENT_SUPPORT=True
 export FLASK_ENV=production
 export PYTHONPATH=.
 export FLASK_APP=app.py
-gunicorn --worker-class gevent --workers 1 --timeout 120 --log-level info 'app:app' -b 0.0.0.0:${PORT:-5000} --preload
+gunicorn --worker-class gevent --workers 1 --timeout 120 --log-level info 'wsgi:application' -b 0.0.0.0:${PORT:-5000}
