@@ -9,7 +9,7 @@ import time
 import traceback
 from functools import wraps
 
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session, current_app
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -46,7 +46,28 @@ stats = {
     "avg_response_time": 0,
     "last_errors": []
 }
+# Ajout d'une fonction d'initialisation explicite
+@app.before_request
+def before_request_func():
+    global _is_initialized, _initialization_started, chatbot
+    global _db_initialized, _search_factory_initialized
 
+    # Pour les health checks, permettre l'accès même pendant l'initialisation
+    if request.path == '/health':
+        return None
+        
+    # Si déjà initialisé, continuer normalement
+    if _is_initialized and chatbot is not None:
+        return None
+        
+    # Si l'initialisation n'a pas encore commencé, la démarrer
+    if not _initialization_started:
+        with app.app_context():
+            initialize()
+        return jsonify({
+            "status": "starting",
+            "message": "Le service démarre, veuillez réessayer dans quelques instants"
+        }), 503  # Service Unavailable
 # Décorateur pour les routes asynchrones
 def async_route(f):
     """Décorateur pour les routes asynchrones"""
@@ -208,6 +229,12 @@ async def process_message(user_id, message):
             'type': 'error',
             'error_id': stats["error_count"]
         }, room=user_id)
+@app.before_first_request
+def ensure_initialization():
+    """S'assure que l'initialisation est lancée dans le contexte de l'application"""
+    global _initialization_started
+    if not _initialization_started:
+        initialize()
 
 def initialize():
     """Initialisation progressive des composants au démarrage"""
@@ -215,6 +242,11 @@ def initialize():
     
     # Éviter les initialisations multiples
     if _is_initialized:
+        return
+        
+    # S'assurer qu'on est dans un contexte d'application Flask
+    if not app.config.get('ENV'):  # Si nous sommes hors du contexte d'application
+        logger.warning("Tentative d'initialisation hors contexte d'application. Reportée.")
         return
         
     app.config['start_time'] = time.time()
@@ -230,44 +262,40 @@ def initialize():
         asyncio.set_event_loop(new_loop)
         
         try:
-            # Initialisation de la base de données SANS contexte d'application (ne dépend pas de Flask)
-            try:
-                new_loop.run_until_complete(asyncio.wait_for(init_db(), timeout=15.0))
-                _db_initialized = True
-                logger.info("Base de données initialisée avec succès")
-            except asyncio.TimeoutError:
-                logger.error("Timeout lors de l'initialisation de la base de données")
-            except Exception as e:
-                logger.error(f"Erreur lors de l'initialisation de la base de données: {str(e)}")
-            
-            # Initialisation du search factory SANS contexte d'application 
-            try:
-                new_loop.run_until_complete(asyncio.wait_for(search_factory.initialize(), timeout=15.0))
-                _search_factory_initialized = True
-                logger.info("Search factory initialisé avec succès")
-            except asyncio.TimeoutError:
-                logger.error("Timeout lors de l'initialisation du search factory")
-            except Exception as e:
-                logger.error(f"Erreur lors de l'initialisation du search factory: {str(e)}")
-            
-            # Initialiser le chatbot seulement si les composants essentiels sont prêts
-            if _db_initialized and _search_factory_initialized:
+            # Utiliser le contexte de l'application pour l'initialisation
+            with app.app_context():
+                # Initialisation de la base de données
                 try:
-                    chatbot = ChatBot(
-                        openai_key=os.getenv('OPENAI_API_KEY'),
-                        qdrant_url=os.getenv('QDRANT_URL'),
-                        qdrant_api_key=os.getenv('QDRANT_API_KEY')
-                    )
-                    # L'initialisation du cache se fera plus tard, sur demande
-                    _cache_initialized = True
-                    _is_initialized = True
-                    logger.info("Chatbot initialisé avec succès")
+                    new_loop.run_until_complete(asyncio.wait_for(init_db(), timeout=15.0))
+                    _db_initialized = True
+                    logger.info("Base de données initialisée avec succès")
                 except Exception as e:
-                    logger.critical(f"Erreur initialisation chatbot: {str(e)}")
-            else:
-                logger.warning("Chatbot non initialisé - composants nécessaires manquants")
+                    logger.error(f"Erreur lors de l'initialisation de la base de données: {str(e)}")
+                
+                # Initialisation du search factory
+                try:
+                    new_loop.run_until_complete(asyncio.wait_for(search_factory.initialize(), timeout=15.0))
+                    _search_factory_initialized = True
+                    logger.info("Search factory initialisé avec succès")
+                except Exception as e:
+                    logger.error(f"Erreur lors de l'initialisation du search factory: {str(e)}")
+                
+                # Initialiser le chatbot seulement si les composants essentiels sont prêts
+                if _db_initialized and _search_factory_initialized:
+                    try:
+                        chatbot = ChatBot(
+                            openai_key=os.getenv('OPENAI_API_KEY'),
+                            qdrant_url=os.getenv('QDRANT_URL'),
+                            qdrant_api_key=os.getenv('QDRANT_API_KEY')
+                        )
+                        # L'initialisation du cache se fera plus tard, sur demande
+                        _cache_initialized = True
+                        _is_initialized = True
+                        logger.info("Chatbot initialisé avec succès")
+                    except Exception as e:
+                        logger.critical(f"Erreur initialisation chatbot: {str(e)}")
         except Exception as e:
-            logger.critical(f"Erreur dans le thread d'initialisation: {str(e)}\n{traceback.format_exc()}")
+            logger.critical(f"Erreur dans le thread d'initialisation: {str(e)}")
         finally:
             new_loop.close()
     

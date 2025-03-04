@@ -88,4 +88,4 @@ echo "Démarrage de l'application sur le port ${PORT:-5000}..."
 export GEVENT_SUPPORT=True
 
 # On utilise worker_class=gevent sans --preload pour éviter les problèmes de fork
-gunicorn --worker-class gevent --workers 1 --timeout 120 --log-level info 'app:app' -b 0.0.0.0:${PORT:-5000}
+PYTHONPATH=. gunicorn --worker-class gevent --workers 1 --timeout 120 --log-level info --preload 'app:app' -b 0.0.0.0:${PORT:-5000}
