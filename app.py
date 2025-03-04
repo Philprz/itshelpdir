@@ -19,8 +19,13 @@ from base_de_donnees import SessionLocal, Conversation, init_db
 from chatbot import ChatBot
 from configuration import logger, global_cache
 from search_factory import search_factory
-
-# Variables globales pour le suivi de l'initialisation
+# Configuration de Flask
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'its_help_secret_key')
+CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+# Variables globales et initialisations différées
+chatbot = None
 _is_initialized = False
 _initialization_started = False
 _db_initialized = False
@@ -29,15 +34,6 @@ _cache_initialized = False
 
 # Chargement des variables d'environnement
 load_dotenv()
-
-# Configuration de Flask
-app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'its_help_secret_key')
-CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
-
-# Initialisation du chatbot
-chatbot = None
 
 # Statistiques et monitoring
 stats = {
@@ -375,10 +371,8 @@ def timeout_handler(seconds=2, default_response=None):
 
             if thread.is_alive():
                 logger.warning(f"Timeout de {seconds}s atteint pour {f.__name__}")
-                return jsonify({
-                    "status": "timeout",
-                    "message": f"La requête a pris plus de {seconds}s et a été interrompue"
-                }), 503
+                response_data = default_response or {"status": "timeout", "message": f"La requête a pris plus de {seconds}s et a été interrompue"}
+                return jsonify(response_data), 503
             
             return result_queue.get_nowait() if not result_queue.empty() else jsonify({
                 "status": "error",
@@ -389,7 +383,7 @@ def timeout_handler(seconds=2, default_response=None):
     return decorator
 
 @app.route('/health')
-@timeout_handler(seconds=2, default_response=jsonify({"status": "timeout", "message": "Health check timeout"}))
+@timeout_handler(seconds=2, default_response={"status": "timeout", "message": "Health check timeout"})
 def health():
     """Endpoint de vérification de santé avec état détaillé"""
     global _is_initialized, _initialization_started
