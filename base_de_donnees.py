@@ -38,16 +38,16 @@ logging.basicConfig(
 )
 # Vérification du chemin pour la base de données
 db_path = os.getenv('DATABASE_URL', 'sqlite+aiosqlite:///data/database.db')
-engine = create_async_engine(db_path)
-db_dir = os.path.dirname(db_path.replace('sqlite+aiosqlite:///', ''))
-if not os.path.exists(db_dir):
-    # Création du répertoire si nécessaire
+# Extraction du chemin du fichier depuis l'URL
+file_path = db_path.replace('sqlite+aiosqlite:///', '')
+db_dir = os.path.dirname(file_path)
+
+# Création du répertoire si nécessaire
+if db_dir and not os.path.exists(db_dir):
     os.makedirs(db_dir, exist_ok=True)
 
 # Initialisation de l'engine SQLite asynchrone
-if not os.path.exists('data'):
-    os.makedirs('data')
-engine = create_async_engine('sqlite+aiosqlite:///data/database.db')
+engine = create_async_engine(db_path, connect_args={"check_same_thread": False})
 
 class PayloadMapping:
     COMMON_FIELDS = {
@@ -263,20 +263,31 @@ def clean_text(text):
 
 async def init_db():
     try:
-        async with engine.begin() as conn:
-            # Vérifier si les tables existent déjà
-            tables_existent = await conn.run_sync(lambda sync_conn: sync_conn.dialect.has_table(sync_conn, 'clients'))
-            
-            if not tables_existent:
-                # Création de toutes les tables définies seulement si elles n'existent pas
-                await conn.run_sync(Base.metadata.create_all)
-                logger.info("Database initialization complete.")
-            else:
-                logger.info("Database tables already exist. Skipping initialization.")
+        # Utilisation d'un timeout pour éviter de bloquer indéfiniment
+        async with asyncio.timeout(10):  # 10 secondes max
+            # Vérifier la connexion avant d'essayer de créer les tables
+            try:
+                async with engine.connect() as test_conn:
+                    await test_conn.execute(select(1))
+                    logger.info("Database connection successful.")
+            except Exception as conn_err:
+                logger.error(f"Database connection failed: {str(conn_err)}")
+                raise
+
+            async with engine.begin() as conn:
+                # Vérifier si les tables existent déjà
+                tables_existent = await conn.run_sync(lambda sync_conn: sync_conn.dialect.has_table(sync_conn, 'clients'))
+                
+                if not tables_existent:
+                    # Création de toutes les tables définies seulement si elles n'existent pas
+                    await conn.run_sync(Base.metadata.create_all)
+                    logger.info("Database initialization complete.")
+                else:
+                    logger.info("Database tables already exist. Skipping initialization.")
+    except asyncio.TimeoutError:
+        logger.error("Timeout during database initialization")
     except Exception as e:
         logger.error(f"Error during database initialization: {str(e)}")
-        # Ne pas lever d'exception pour permettre au service de démarrer même 
-        # si la base de données n'est pas prête
 def create_sqlite_functions(conn):
     def normalize_string(s):
         if s is None:

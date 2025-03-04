@@ -225,6 +225,7 @@ def initialize():
     else:
         _do_initialize()
         
+
 def _do_initialize():
     """Effectue l'initialisation dans le contexte de l'application"""
     global chatbot, _is_initialized, _initialization_started
@@ -247,14 +248,30 @@ def _do_initialize():
             ctx.push()  # Activer le contexte explicitement
             
             try:
-                # Initialisation de la base de données
+                # Initialisation de la base de données avec gestion plus robuste des erreurs
                 try:
-                    new_loop.run_until_complete(asyncio.wait_for(init_db(), timeout=30.0))
+                    # Réduire le timeout à 15 secondes pour éviter de bloquer trop longtemps
+                    new_loop.run_until_complete(asyncio.wait_for(init_db(), timeout=15.0))
                     _db_initialized = True
                     logger.info("Base de données initialisée avec succès")
+                except asyncio.TimeoutError:
+                    logger.error("Timeout lors de l'initialisation de la base de données - tentative de fonctionnement sans BD")
+                    # On marque la BD comme initialisée pour permettre un fonctionnement partiel
+                    _db_initialized = True
                 except Exception as e:
                     logger.error(f"Erreur lors de l'initialisation de la base de données: {str(e)}")
                     logger.error(traceback.format_exc())
+                    # Tentative de création minimale des tables
+                    try:
+                        from sqlalchemy.ext.asyncio import create_async_engine
+                        from sqlalchemy.orm import declarative_base
+                        Base = declarative_base()
+                        temp_engine = create_async_engine('sqlite+aiosqlite::memory:')
+                        new_loop.run_until_complete(init_minimal_db(temp_engine))
+                        _db_initialized = True
+                        logger.info("Initialisation minimale de la base de données en mémoire")
+                    except Exception as e2:
+                        logger.critical(f"Échec de l'initialisation minimale: {str(e2)}")
                 
                 # Initialisation du search factory
                 try:
@@ -293,7 +310,21 @@ def _do_initialize():
     init_thread.daemon = True
     init_thread.start()
     logger.info("Thread d'initialisation démarré")
-
+async def init_minimal_db(engine):
+    """Initialisation minimale de la base de données en cas d'urgence"""
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    from base_de_donnees import Base  # Import explicite de Base
+    
+    # Création d'une session en mémoire
+    async_session = sessionmaker(
+        engine, expire_on_commit=False, class_=AsyncSession
+    )
+    
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    
+    return async_session
 @app.before_request
 def before_request_func():
     global _is_initialized, _initialization_started, chatbot

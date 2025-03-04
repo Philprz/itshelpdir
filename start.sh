@@ -6,7 +6,17 @@ export GIT_LFS_SKIP_SMUDGE=1
 
 # Création du répertoire pour les fichiers volumineux si nécessaire
 mkdir -p Lib/site-packages/lance
-mkdir -p data  # Assurer que le répertoire data existe
+# Assurons-nous que les répertoires requis existent avec les permissions correctes
+mkdir -p data
+chmod 755 data
+if [ -n "$DATABASE_URL" ] && [[ "$DATABASE_URL" == sqlite* ]]; then
+    # Extraction du chemin de la base de données depuis l'URL
+    DB_PATH=$(echo "$DATABASE_URL" | sed -E 's/sqlite.*:\/\///')
+    DB_DIR=$(dirname "$DB_PATH")
+    mkdir -p "$DB_DIR"
+    chmod 755 "$DB_DIR"
+    echo "Database directory created: $DB_DIR"
+fi
 
 # Activer l'environnement virtuel s'il existe
 if [ -d "venv" ]; then
