@@ -36,8 +36,8 @@ logging.basicConfig(
     level=logging.WARNING,  # Passage de DEBUG à WARNING
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
-# Vérification du chemin pour la base de données
-db_path = os.getenv('DATABASE_URL', 'sqlite+aiosqlite:///data/database.db')
+# Chemin relatif avec vérification d'existence
+db_path = os.getenv('DATABASE_URL', 'sqlite+aiosqlite:///./data/database.db')
 # Extraction du chemin du fichier depuis l'URL
 file_path = db_path.replace('sqlite+aiosqlite:///', '')
 db_dir = os.path.dirname(file_path)

@@ -13,9 +13,10 @@ if [ -n "$DATABASE_URL" ] && [[ "$DATABASE_URL" == sqlite* ]]; then
     # Extraction du chemin de la base de données depuis l'URL
     DB_PATH=$(echo "$DATABASE_URL" | sed -E 's/sqlite.*:\/\///')
     DB_DIR=$(dirname "$DB_PATH")
-    mkdir -p "$DB_DIR"
-    chmod 755 "$DB_DIR"
-    echo "Database directory created: $DB_DIR"
+    # Utilisation explicite de chemins relatifs
+    mkdir -p ./data
+    chmod 755 ./data
+    echo "Répertoire data créé avec succès"
 fi
 
 # Activer l'environnement virtuel s'il existe

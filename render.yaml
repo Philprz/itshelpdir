@@ -4,6 +4,9 @@ services:
     env: python
     # Commandes modifiées pour contourner les problèmes Git LFS
     buildCommand: |
+      # Création explicite des répertoires nécessaires
+      mkdir -p ./data
+      chmod 755 ./data
       # Nettoyage complet du répertoire de destination
       rm -rf ./* ./.[!.]*
       # Téléchargement direct des fichiers sans utiliser Git LFS
