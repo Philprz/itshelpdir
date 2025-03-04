@@ -164,6 +164,7 @@ def get_slack_bot(config: Config):
 # Dans le fichier configuration.py, modifier la classe GlobalCache 
 # en ajoutant une méthode d'initialisation qui ne dépend pas du contexte Flask
 
+
 class GlobalCache:
     """Cache global partagé entre toutes les instances avec gestion de la mémoire."""
     
@@ -239,11 +240,9 @@ class GlobalCache:
             
     async def get(self, key, namespace="default"):
         """Récupère une valeur du cache avec namespace."""
+        # Ne pas essayer d'initialiser le cache dans la méthode get
         if not self._initialized:
-            try:
-                await self.start_cleanup_task()
-            except Exception as e:
-                logger.warning(f"Erreur initialisation cache lors de get(): {e}")
+            return None
                 
         full_key = f"{namespace}:{key}"
         async with self._lock:
@@ -260,11 +259,9 @@ class GlobalCache:
             
     async def set(self, key, value, namespace="default"):
         """Stocke une valeur dans le cache avec namespace."""
+        # Ne pas essayer d'initialiser le cache dans la méthode set
         if not self._initialized:
-            try:
-                await self.start_cleanup_task()
-            except Exception as e:
-                logger.warning(f"Erreur initialisation cache lors de set(): {e}")
+            return
                 
         full_key = f"{namespace}:{key}"
         async with self._lock:
@@ -302,25 +299,12 @@ class GlobalCache:
             self._access_times[full_key] = time.monotonic()
             self._size_tracker[full_key] = size
             self._total_memory += size
-    def _estimate_size(self, value):
-        """Estime la taille mémoire d'un objet."""
-        if isinstance(value, list) and len(value) > 0:
-            # Pour les embeddings (listes de floats)
-            if isinstance(value[0], float):
-                return len(value) * 8  # 8 octets par float
-            # Pour les listes d'autres types
-            return sum(sys.getsizeof(item) for item in value[:10]) * (len(value) / 10)
-        elif isinstance(value, dict):
-            # Estimation pour les dictionnaires
-            sample_size = min(10, len(value))
-            if sample_size > 0:
-                sample_keys = list(value.keys())[:sample_size]
-                avg_size = sum(sys.getsizeof(k) + sys.getsizeof(value[k]) for k in sample_keys) / sample_size
-                return avg_size * len(value)
-        return sys.getsizeof(value)
 
     async def invalidate(self, pattern="*", namespace="default"):
         """Invalide les entrées correspondant au motif dans le namespace."""
+        if not self._initialized:
+            return
+            
         import fnmatch
         async with self._lock:
             if pattern == "*":
@@ -333,15 +317,28 @@ class GlobalCache:
             for key in keys_to_remove:
                 self._remove_item(key)
                 
-    def get_stats(self):
+    async def get_stats(self):
         """Retourne des statistiques sur l'utilisation du cache."""
-        return {
-            "items": len(self._cache),
-            "memory_used": self._total_memory,
-            "memory_limit": self._max_memory,
-            "capacity": f"{(len(self._cache) / self._max_size) * 100:.1f}%",
-            "memory_percentage": f"{(self._total_memory / self._max_memory) * 100:.1f}%"
-        }
+        if not self._initialized:
+            return {
+                "items": 0,
+                "memory_used": 0,
+                "memory_limit": self._max_memory,
+                "capacity": "0.0%",
+                "memory_percentage": "0.0%",
+                "status": "not_initialized"
+            }
+            
+        async with self._lock:
+            return {
+                "items": len(self._cache),
+                "memory_used": self._total_memory,
+                "memory_limit": self._max_memory,
+                "capacity": f"{(len(self._cache) / self._max_size) * 100:.1f}%",
+                "memory_percentage": f"{(self._total_memory / self._max_memory) * 100:.1f}%",
+                "status": "initialized"
+            }
+
 # Initialisation du cache global
 global_cache = GlobalCache(
     max_size=int(os.getenv('EMBEDDING_CACHE_SIZE', 2000)),

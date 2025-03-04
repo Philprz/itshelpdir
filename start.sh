@@ -4,6 +4,10 @@ set -e  # Arrêt en cas d'erreur
 # Configuration pour contourner les problèmes de Git LFS
 export GIT_LFS_SKIP_SMUDGE=1
 
+# Définition des variables d'environnement Flask
+export FLASK_APP=app.py
+export FLASK_ENV=production
+
 # Création du répertoire pour les fichiers volumineux si nécessaire
 mkdir -p Lib/site-packages/lance
 mkdir -p data  # Assurer que le répertoire data existe
@@ -46,7 +50,13 @@ else
 fi
 
 # Exécuter une initialisation simplifiée de la base de données
+# en s'assurant que le module base_de_donnees est bien disponible
 echo "Initialisation de la base de données..."
+if ! python -c "import base_de_donnees" &> /dev/null; then
+    echo "ERREUR: Module base_de_donnees non trouvé. Vérifier l'installation."
+    exit 1
+fi
+
 python - <<EOF
 import asyncio
 import os
@@ -64,6 +74,8 @@ async def init_db_standalone():
         print(f"Erreur lors de l'initialisation: {e}")
         import traceback
         traceback.print_exc()
+        # Ne pas quitter avec erreur pour permettre au serveur de démarrer quand même
+        # et de gérer l'initialisation via Flask
 
 # Exécution de l'initialisation
 asyncio.run(init_db_standalone())
@@ -71,5 +83,9 @@ EOF
 
 # Démarrer l'application avec Gunicorn
 echo "Démarrage de l'application sur le port ${PORT:-5000}..."
-# Utilisation de gevent comme worker class, SANS préchargement
-gunicorn --worker-class gevent -w 1 'app:app' -b 0.0.0.0:${PORT:-5000}
+
+# Variables d'environnement pour gevent
+export GEVENT_SUPPORT=True
+
+# On utilise worker_class=gevent sans --preload pour éviter les problèmes de fork
+gunicorn --worker-class gevent --workers 1 --timeout 120 --log-level info 'app:app' -b 0.0.0.0:${PORT:-5000}
