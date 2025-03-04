@@ -49,6 +49,10 @@ else
     fi
 fi
 
+# Corriger le problème de before_first_request dans app.py
+echo "Correction du code pour compatibilité Flask récent..."
+sed -i 's/@app.before_first_request/# @app.before_first_request/g' app.py
+
 # Exécuter une initialisation simplifiée de la base de données
 # en s'assurant que le module base_de_donnees est bien disponible
 echo "Initialisation de la base de données..."
@@ -88,4 +92,4 @@ echo "Démarrage de l'application sur le port ${PORT:-5000}..."
 export GEVENT_SUPPORT=True
 
 # On utilise worker_class=gevent sans --preload pour éviter les problèmes de fork
-PYTHONPATH=. gunicorn --worker-class gevent --workers 1 --timeout 120 --log-level info --preload 'app:app' -b 0.0.0.0:${PORT:-5000}
+PYTHONPATH=. gunicorn --worker-class gevent --workers 1 --timeout 120 --log-level info 'app:app' -b 0.0.0.0:${PORT:-5000}

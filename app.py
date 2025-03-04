@@ -229,7 +229,6 @@ async def process_message(user_id, message):
             'type': 'error',
             'error_id': stats["error_count"]
         }, room=user_id)
-@app.before_first_request
 def ensure_initialization():
     """S'assure que l'initialisation est lancée dans le contexte de l'application"""
     global _initialization_started
@@ -322,7 +321,8 @@ def before_request_func():
         
     # Si l'initialisation n'a pas encore commencé, la démarrer
     if not _initialization_started:
-        initialize()
+        with app.app_context():
+            initialize()
         return jsonify({
             "status": "starting",
             "message": "Le service démarre, veuillez réessayer dans quelques instants"
