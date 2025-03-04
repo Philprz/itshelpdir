@@ -123,8 +123,13 @@ def handle_message(data):
     emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
     
 def run_process_message(user_id, message):
-    # Utilisation d'asyncio.run pour lancer la coroutine dans une nouvelle boucle
-    asyncio.run(process_message(user_id, message))
+    # On définit une fonction interne qui lance la coroutine dans un thread dédié
+    def run_in_thread():
+        # Cette fonction crée et exécute une nouvelle boucle pour la coroutine
+        asyncio.run(process_message(user_id, message))
+    # Démarrage d'un thread pour exécuter la coroutine
+    import threading
+    threading.Thread(target=run_in_thread).start()
 
 
 # Correction pour la fonction process_message dans app.py
