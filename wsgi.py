@@ -1,4 +1,6 @@
 # wsgi.py - Point d'entrée pour Gunicorn
+from gevent import monkey
+monkey.patch_all()  # À placer en tout premier
 import os
 import sys
 import logging

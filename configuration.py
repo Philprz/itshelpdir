@@ -147,22 +147,6 @@ class Config:
 
     def get(self, key, default=None):
         return self.config.get(key, default)  # Utilisation de self.config au lieu de self._config
-def get_slack_bot(config: Config):
-    from chatbot import SlackBot
-    if not all([
-        config.get("SLACK_BOT_TOKEN"),
-        config.get("SLACK_APP_TOKEN"),
-        config.get("OPENAI_API_KEY")
-    ]):
-        raise ConfigError("Tokens manquants pour l'initialisation du SlackBot")
-        
-    return SlackBot(
-        slack_token=config.config["SLACK_BOT_TOKEN"],
-        app_token=config.config["SLACK_APP_TOKEN"], 
-        openai_key=config.config["OPENAI_API_KEY"]
-    )
-# Dans le fichier configuration.py, modifier la classe GlobalCache 
-# en ajoutant une méthode d'initialisation qui ne dépend pas du contexte Flask
 
 
 class GlobalCache:

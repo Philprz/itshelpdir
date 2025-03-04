@@ -213,25 +213,37 @@ class TestResult(Base):
 
 class Client(Base):
     __tablename__ = 'clients'
+    
+    # Colonnes de la table
     id = Column(Integer, primary_key=True, autoincrement=True)
-    client = Column(String, nullable=False) 
-    consultant = Column(String) 
+    client = Column(String, nullable=False)
+    consultant = Column(String)
     statut = Column(String)
     jira = Column(String)
     zendesk = Column(String)
     confluence = Column(String)
     erp = Column(String)
+    
     @property
     def variations(self) -> set:
-        """Retourne toutes les variations possibles du nom du client"""
-        variations = {self.client}  # Le nom principal
-        
-        # Ajout des variations depuis JIRA/Zendesk/Confluence si différentes
+        """
+        Retourne toutes les variations possibles du nom du client.
+        Combine le nom principal avec les valeurs des champs jira, zendesk et confluence.
+        """
+        variations = {self.client}
         for field in [self.jira, self.zendesk, self.confluence]:
             if field and field != self.client:
                 variations.add(field)
-                
         return variations
+
+    def matches_variation(self, query: str) -> bool:
+        """
+        Vérifie si la requête correspond à une variation du nom du client.
+        La comparaison se fait après normalisation (suppression d'espaces, majuscules, caractères spéciaux).
+        """
+        normalized_query = normalize_string(query)
+        return any(normalize_string(var) in normalized_query for var in self.variations)
+
 
 class SatisfactionRating(Base):
     __tablename__ = 'satisfaction_ratings'
