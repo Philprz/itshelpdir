@@ -6,6 +6,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 import time
+import threading
 import traceback
 from functools import wraps
 
@@ -33,7 +34,7 @@ CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
 socketio = SocketIO(
     app, 
     cors_allowed_origins="*", 
-    async_mode='asyncio',
+    async_mode='gevent',  # Remplacer 'asyncio' par 'gevent'
     ping_timeout=30,  # 30 secondes pour le ping timeout
     ping_interval=15,  # 15 secondes pour l'intervalle de ping
     max_http_buffer_size=1024 * 1024,  # 1MB buffer
@@ -93,12 +94,13 @@ def handle_disconnect():
     logger.info(f"Client déconnecté: {request.sid}")
 
 @socketio.on('message')
-async def handle_message(data):
-    # Traitement asynchrone direct
+def handle_message(data):
+    # Traitement synchrone
     user_id = data.get('user_id', request.sid)
     message = data.get('message', '')
+    
     if not chatbot:
-        await emit('response', {
+        emit('response', {
             'message': 'Le service est en cours d\'initialisation, veuillez patienter quelques instants...',
             'type': 'status',
             'initializing': True
@@ -108,23 +110,21 @@ async def handle_message(data):
     # Envoi d'un accusé de réception
     emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
     
-    # Lancer le traitement directement de manière asynchrone
-    # Pas besoin d'utiliser un thread ou une tâche d'arrière-plan car nous sommes déjà
-    # dans un contexte asynchrone avec socketio
+    # Utiliser un thread pour le traitement asynchrone
+    thread = threading.Thread(target=run_process_message, args=(user_id, message))
+    thread.daemon = True
+    thread.start()
+
+def run_process_message(user_id, message):
+    """Exécute process_message dans une boucle d'événements dédiée."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        result = await process_message(user_id, message)
-        # Si process_message renvoie un résultat, on peut l'utiliser ici
+        loop.run_until_complete(process_message(user_id, message))
     except Exception as e:
-        logger.error(f"Erreur lors du traitement du message: {str(e)}")
-        emit('response', {
-            'message': f"Une erreur est survenue lors du traitement: {str(e)}",
-            'type': 'error'
-        })
-    
-
-
-
-# Correction pour la fonction process_message dans app.py
+        logger.error(f"Erreur dans run_process_message: {str(e)}")
+    finally:
+        loop.close()
 
 async def process_message(user_id, message):
     """Traite le message de manière asynchrone avec gestion améliorée des erreurs"""
