@@ -9,10 +9,16 @@ import time
 import threading
 import traceback
 from functools import wraps
-
+from gevent import monkey
+monkey.patch_all()
 from flask import Flask, render_template, request, jsonify, session, current_app
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
+def process_data(data):
+    # Fonction d'exemple pour traiter le message reçu via la route /process
+    # Remplacer "test_user" par l'identifiant utilisateur réel si nécessaire
+    user_id = "test_user"
+    run_process_message(user_id, data)
 from dotenv import load_dotenv
 
 # Imports depuis le code optimisé
@@ -22,6 +28,15 @@ from configuration import logger, global_cache
 from search_factory import search_factory
 # Configuration de Flask
 app = Flask(__name__)
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins="*", 
+    async_mode='gevent',  # Utiliser gevent pour une meilleure compatibilité avec Gunicorn et Render
+    ping_timeout=30,  # 30 secondes pour le ping timeout
+    ping_interval=15,  # 15 secondes pour l'intervalle de ping
+    max_http_buffer_size=1024 * 1024,  # 1MB buffer
+    engineio_logger=False  # Désactiver les logs Engine.IO pour réduire le bruit
+)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'its_help_secret_key')
 # Augmentation des timeouts
 app.config['TIMEOUT'] = 60  # 60 secondes pour les requêtes
@@ -29,17 +44,13 @@ app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 heure pour les sessions
 
 # Configuration de CORS avec options explicites
 CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
+"""Exemple de remplacement d'un appel asyncio.run par start_background_task """
+@app.route('/process')
+def process():
+    data = request.args.get('data')
+    socketio.start_background_task(process_data, data)
+    return "Processing started"
 
-# Configuration de SocketIO avec options de performance
-socketio = SocketIO(
-    app, 
-    cors_allowed_origins="*", 
-    async_mode='threading', # Utiliser threading pour éviter les conflits d'event loop
-    ping_timeout=30,  # 30 secondes pour le ping timeout
-    ping_interval=15,  # 15 secondes pour l'intervalle de ping
-    max_http_buffer_size=1024 * 1024,  # 1MB buffer
-    engineio_logger=False  # Désactiver les logs Engine.IO pour réduire le bruit
-)
 # Variables globales et initialisations différées
 chatbot = None
 _is_initialized = False
@@ -110,13 +121,25 @@ def handle_message(data):
     # Envoi d'un accusé de réception
     emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
     
-    # Utiliser une tâche de fond de SocketIO pour le traitement asynchrone
+    # Utiliser une tâche de fond SocketIO pour le traitement asynchrone
     socketio.start_background_task(run_process_message, user_id, message)
 
+
 def run_process_message(user_id, message):
-    """Exécute process_message en utilisant asyncio.run"""
+    """Exécute process_message en vérifiant l'existence d'une boucle d'événements"""
     try:
-        asyncio.run(process_message(user_id, message))
+        try:
+            # Essayer d'obtenir la boucle d'événements en cours
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # Si une boucle est déjà en cours, planifier la tâche
+            asyncio.create_task(process_message(user_id, message))
+        else:
+            # Sinon, exécuter dans une nouvelle boucle asyncio
+            asyncio.run(process_message(user_id, message))
     except Exception as e:
         logger.error(f"Erreur dans run_process_message: {str(e)}")
 
@@ -475,11 +498,7 @@ if __name__ == '__main__':
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # Configuration des loggers spécifiques
-    for logger_name in ['werkzeug', 'engineio', 'socketio']:
-        logging.getLogger(logger_name).setLevel(logging.WARNING)
-    
-    # Démarrage du serveur
+    # Démarrage du serveur via SocketIO (pour compatibilité avec WebSocket)
     port = int(os.getenv('PORT', 5000))
     logger.info(f"Démarrage du serveur sur le port {port}")
     socketio.run(app, host='0.0.0.0', port=port, debug=True)
