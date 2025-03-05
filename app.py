@@ -110,21 +110,15 @@ def handle_message(data):
     # Envoi d'un accusé de réception
     emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
     
-    # Utiliser un thread pour le traitement asynchrone
-    thread = threading.Thread(target=run_process_message, args=(user_id, message))
-    thread.daemon = True
-    thread.start()
+    # Utiliser une tâche de fond de SocketIO pour le traitement asynchrone
+    socketio.start_background_task(run_process_message, user_id, message)
 
 def run_process_message(user_id, message):
-    """Exécute process_message dans une boucle d'événements dédiée."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    """Exécute process_message en utilisant asyncio.run"""
     try:
-        result = loop.run_until_complete(process_message(user_id, message))
+        asyncio.run(process_message(user_id, message))
     except Exception as e:
         logger.error(f"Erreur dans run_process_message: {str(e)}")
-    finally:
-        loop.close()
 
 async def process_message(user_id, message):
     """Traite le message de manière asynchrone avec gestion améliorée des erreurs"""
