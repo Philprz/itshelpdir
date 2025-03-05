@@ -174,3 +174,100 @@ document.addEventListener('DOMContentLoaded', function() {
         chatWindow.scrollTop = chatWindow.scrollHeight;
     }
 });
+// Fonction pour ajouter un message du bot à l'interface
+function addBotMessage(text, blocks) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'bot-message';
+    
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+    
+    // Si des blocs sont présents, les traiter
+    if (blocks && Array.isArray(blocks)) {
+        blocks.forEach(block => {
+            if (block.type === 'section' && block.text) {
+                const blockContent = document.createElement('div');
+                if (block.text.type === 'mrkdwn') {
+                    // Utiliser marked.js pour convertir le markdown
+                    blockContent.innerHTML = marked.parse(block.text.text);
+                }
+                else {
+                    blockContent.textContent = block.text.text;
+                }
+                contentDiv.appendChild(blockContent);
+            } 
+            else if (block.type === 'divider') {
+                const divider = document.createElement('hr');
+                contentDiv.appendChild(divider);
+            }
+            else if (block.type === 'actions' && block.elements) {
+                // Création d'un conteneur pour les boutons
+                const actionsContainer = document.createElement('div');
+                actionsContainer.className = 'action-buttons-container';
+                
+                // Création de chaque bouton d'action
+                block.elements.forEach(element => {
+                    if (element.type === 'button') {
+                        const button = document.createElement('button');
+                        button.className = 'action-button';
+                        button.textContent = element.text.text;
+                        
+                        // Stockage des données d'action dans des attributs data-*
+                        if (element.value) {
+                            const [actionType, actionValue] = element.value.split(':');
+                            button.dataset.actionType = actionType;
+                            button.dataset.actionValue = actionValue;
+                        }
+                        
+                        // Ajout du bouton au conteneur
+                        actionsContainer.appendChild(button);
+                    }
+                });
+                
+                // Ajout du conteneur de boutons au contenu du message
+                contentDiv.appendChild(actionsContainer);
+            }
+        });
+    } else {
+        // Fallback au texte simple si pas de blocs
+        const messageContent = document.createElement('div');
+        messageContent.innerHTML = marked.parse(text);
+        contentDiv.appendChild(messageContent);
+    }
+    
+    messageDiv.appendChild(contentDiv);
+    
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'message-time';
+    timeSpan.textContent = new Date().toLocaleTimeString();
+    messageDiv.appendChild(timeSpan);
+    
+    chatWindow.appendChild(messageDiv);
+    
+    // Scroll vers le bas
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+}
+
+// Ajout d'un gestionnaire d'événements pour les clics sur les boutons d'action
+chatWindow.addEventListener('click', function(event) {
+    // Vérifier si c'est un bouton d'action
+    const actionButton = event.target.closest('.action-button');
+    if (actionButton) {
+        const actionType = actionButton.dataset.actionType;
+        const actionValue = actionButton.dataset.actionValue;
+        
+        if (actionType && actionValue) {
+            // Envoi de l'action au serveur
+            socket.emit('message', {
+                user_id: userId,
+                action: {
+                    type: actionType,
+                    value: actionValue
+                }
+            });
+            
+            // Ajout d'un indicateur de saisie
+            addTypingIndicator();
+        }
+    }
+});

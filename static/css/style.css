@@ -153,3 +153,23 @@ pre {
 .form-check-inline {
     margin-right: 15px;
 }
+.action-buttons-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.action-button {
+    background-color: #f0f2f5;
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s;
+}
+
+.action-button:hover {
+    background-color: #e6e8eb;
+}

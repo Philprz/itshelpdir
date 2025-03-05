@@ -742,17 +742,6 @@ class ChatBot:
             return "Erreur lors de la génération du résumé."
     
     async def process_web_message(self, text: str, conversation: Any, user_id: str) -> Dict:
-        """
-        Traite un message provenant de l'interface web.
-        
-        Args:
-            text: Texte du message
-            conversation: Contexte de conversation
-            user_id: Identifiant de l'utilisateur
-            
-        Returns:
-            Réponse formatée pour l'interface web
-        """
         start_time = time.monotonic()
         try:
             # Si c'est une commande spéciale, traitement approprié
@@ -838,37 +827,46 @@ class ChatBot:
                     }]
                 }
             
-            # Traitement selon le mode identifié
-            mode = analysis.get('mode', 'detail')
+            # Modification ici: afficher un résumé par défaut au lieu du mode détaillé
+            # Génération d'un résumé concis
+            summary = await self.generate_summary(resultats, text)
             
-            elapsed_time = time.monotonic() - start_time
-            self.logger.info(f"Traitement terminé en {elapsed_time:.2f}s. Mode: {mode}")
+            # Préparation des boutons pour changer de mode
+            action_buttons = {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "🔍 Détails",
+                            "emoji": True
+                        },
+                        "value": f"details:{text}"
+                    },
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "📋 Guide",
+                            "emoji": True
+                        },
+                        "value": f"guide:{text}"
+                    }
+                ]
+            }
             
-            if mode == 'guide':
-                # Génération d'un guide étape par étape
-                guide = await self.generate_guide(resultats, text)
-                return {
-                    "text": guide,
-                    "blocks": [{
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"🔍 *Guide étape par étape*\n\n{guide}"}
-                    }]
-                }
-                
-            elif mode == 'résumé':
-                # Génération d'un résumé concis
-                summary = await self.generate_summary(resultats, text)
-                return {
-                    "text": summary,
-                    "blocks": [{
+            # Création de la réponse formatée avec le résumé et les boutons
+            return {
+                "text": summary,
+                "blocks": [
+                    {
                         "type": "section",
                         "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}
-                    }]
-                }
-                
-            else:  # mode == 'detail' par défaut
-                # Affichage détaillé des résultats
-                return await self.format_response(resultats, text)
+                    },
+                    action_buttons
+                ]
+            }
             
         except Exception as e:
             self.logger.error(f"Erreur process_web_message: {str(e)}")
@@ -883,7 +881,110 @@ class ChatBot:
                 }]
             }
             
-    async def _process_command(self, command: str, conversation: Any, user_id: str) -> Dict:
+   
+    async def handle_action_button(self, action_type: str, action_value: str, conversation: Any, user_id: str) -> Dict:
+        """
+        Gère les actions des boutons cliqués par l'utilisateur.
+        
+        Args:
+            action_type: Type d'action ('details', 'guide', etc.)
+            action_value: Valeur associée (généralement la question originale)
+            conversation: Contexte de conversation
+            user_id: Identifiant de l'utilisateur
+            
+        Returns:
+            Réponse formatée selon l'action demandée
+        """
+        try:
+            # Récupération de la question originale
+            if not action_value:
+                return {
+                    "text": "Action non valide: paramètres manquants",
+                    "blocks": [{
+                        "type": "section", 
+                        "text": {"type": "mrkdwn", "text": "❌ Action non valide: paramètres manquants"}
+                    }]
+                }
+                
+            # Récupération du contexte des résultats précédents
+            context = json.loads(conversation.context) if conversation.context else {}
+            last_results = context.get('last_results', [])
+            
+            if action_type == "details":
+                # Afficher les détails des résultats
+                detailed_response = await self.format_response(last_results, action_value)
+                return detailed_response
+                
+            elif action_type == "guide":
+                # Générer un guide étape par étape
+                guide = await self.generate_guide(last_results, action_value)
+                return {
+                    "text": guide,
+                    "blocks": [{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"🔍 *Guide étape par étape*\n\n{guide}"}
+                    }]
+                }
+                
+            elif action_type == "summary":
+                # Regenerer un résumé
+                summary = await self.generate_summary(last_results, action_value)
+                
+                # Préparation des boutons pour changer de mode
+                action_buttons = {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "🔍 Détails",
+                                "emoji": True
+                            },
+                            "value": f"details:{action_value}"
+                        },
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "📋 Guide",
+                                "emoji": True
+                            },
+                            "value": f"guide:{action_value}"
+                        }
+                    ]
+                }
+                
+                return {
+                    "text": summary,
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}
+                        },
+                        action_buttons
+                    ]
+                }
+                
+            else:
+                return {
+                    "text": f"Action non reconnue: {action_type}",
+                    "blocks": [{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"❓ Action non reconnue: {action_type}"}
+                    }]
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Erreur lors du traitement de l'action {action_type}: {str(e)}")
+            return {
+                "text": f"Erreur lors du traitement de l'action: {str(e)}",
+                "blocks": [{
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"❌ Erreur lors du traitement de l'action: {str(e)}"}
+                }]
+            }
+    async def _process_command(self, command: str, conversation: Any, user_id: str) -> Dict:    
         """
         Traite une commande spéciale commençant par '/'.
         
@@ -900,13 +1001,13 @@ class ChatBot:
         if command == 'help':
             # Commande d'aide
             help_text = """
-*Commandes disponibles:*
-• `/help` - Affiche cette aide
-• `/clear` - Efface le contexte de conversation
-• `/status` - Affiche l'état de la connectivité des sources
-• `/guide <sujet>` - Génère un guide sur le sujet spécifié
-• `/client <nom>` - Définit le client par défaut pour les prochaines requêtes
-            """
+                *Commandes disponibles:*
+                • `/help` - Affiche cette aide
+                • `/clear` - Efface le contexte de conversation
+                • `/status` - Affiche l'état de la connectivité des sources
+                • `/guide <sujet>` - Génère un guide sur le sujet spécifié
+                • `/client <nom>` - Définit le client par défaut pour les prochaines requêtes
+                            """
             return {
                 "text": "Aide ITS Help",
                 "blocks": [{
@@ -959,13 +1060,13 @@ class ChatBot:
                 
                 # Formatage du message
                 status_message = f"""
-*État des services ITS Help*
+                    *État des services ITS Help*
 
-*OpenAI:* {openai_status}
-*Cache:* {cache_stats.get('items', 'N/A')} éléments
+                    *OpenAI:* {openai_status}
+                    *Cache:* {cache_stats.get('items', 'N/A')} éléments
 
-*Collections Qdrant:*
-"""
+                    *Collections Qdrant:*
+                    """
                 for name, count in collection_info.items():
                     status_message += f"• {name}: {count} documents\n"
                 

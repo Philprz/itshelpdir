@@ -15,6 +15,8 @@ from flask import Flask, render_template, request, jsonify, session, current_app
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 def process_data(data):
+    logger.info("process_data called with data: %s", data)
+    print("process_data called with data:", data)
     # Fonction d'exemple pour traiter le message reçu via la route /process
     # Remplacer "test_user" par l'identifiant utilisateur réel si nécessaire
     user_id = "test_user"
@@ -35,7 +37,7 @@ socketio = SocketIO(
     ping_timeout=30,  # 30 secondes pour le ping timeout
     ping_interval=15,  # 15 secondes pour l'intervalle de ping
     max_http_buffer_size=1024 * 1024,  # 1MB buffer
-    engineio_logger=False  # Désactiver les logs Engine.IO pour réduire le bruit
+    engineio_logger=True  # Activer les logs Engine.IO pour le debugging
 )
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'its_help_secret_key')
 # Augmentation des timeouts
@@ -95,6 +97,7 @@ def index():
 
 @socketio.on('connect')
 def handle_connect():
+    print("handle_connect: tentative de connexion SocketIO")
     """Gestion de la connexion SocketIO"""
     logger.info(f"Client connecté: {request.sid}")
     emit('response', {'message': 'Connexion établie avec ITS Help'})
@@ -109,7 +112,8 @@ def handle_message(data):
     # Traitement synchrone
     user_id = data.get('user_id', request.sid)
     message = data.get('message', '')
-    
+    logger.info("handle_message déclenché, user_id: %s, message: %s", user_id, message)
+    print("handle_message déclenché, data reçues:", data)
     if not chatbot:
         emit('response', {
             'message': 'Le service est en cours d\'initialisation, veuillez patienter quelques instants...',
@@ -137,10 +141,10 @@ def run_process_message(user_id, message):
         finally:
             loop.close()
 
-        import threading
-        t = threading.Thread(target=target)
-        t.daemon = True
-        t.start()
+    import threading
+    t = threading.Thread(target=target)
+    t.daemon = True
+    t.start()
 
 async def process_message(user_id, message):
     """Traite le message de manière asynchrone avec gestion améliorée des erreurs"""
