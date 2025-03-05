@@ -24,7 +24,7 @@ def process_data(data):
     user_id = "test_user"
     run_process_message(user_id, data)
 from dotenv import load_dotenv
-
+from sqlalchemy import text
 # Imports depuis le code optimisé
 from base_de_donnees import SessionLocal, Conversation, init_db
 from chatbot import ChatBot
@@ -157,7 +157,7 @@ async def process_message(user_id, message):
             # Récupération ou création de la conversation
             # Utilisation de paramètres de requête pour éviter les injections SQL
             result = await db.execute(
-                "SELECT * FROM conversations WHERE user_id = :user_id",
+                text("SELECT * FROM conversations WHERE user_id = :user_id"),
                 {"user_id": user_id}
             )
             conversation = result.fetchone()
@@ -180,7 +180,7 @@ async def process_message(user_id, message):
                 
                 # Récupération de la conversation nouvellement créée
                 result = await db.execute(
-                    "SELECT * FROM conversations WHERE user_id = :user_id",
+                    text("SELECT * FROM conversations WHERE user_id = :user_id"),
                     {"user_id": user_id}
                 )
                 conversation = result.fetchone()
@@ -195,11 +195,11 @@ async def process_message(user_id, message):
             # Mise à jour de la dernière interaction avec paramètres sécurisés
             current_time = datetime.now(timezone.utc).isoformat()
             await db.execute(
-                """
+                text("""
                 UPDATE conversations 
                 SET last_interaction = :interaction_time
                 WHERE user_id = :user_id
-                """,
+                """),
                 {
                     "interaction_time": current_time,
                     "user_id": user_id
