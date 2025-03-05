@@ -309,7 +309,10 @@ class ChatBot:
                 return source_type, []
         
         # Exécution des recherches en parallèle
-        tasks = [execute_search(source_type, client) for source_type, client in clients.items()]
+        tasks = []
+        for source_type, client in clients.items():
+            task = asyncio.create_task(execute_search(source_type, client))
+            tasks.append(task)
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Traitement et fusion des résultats

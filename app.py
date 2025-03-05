@@ -190,7 +190,10 @@ async def process_message(user_id, message):
         
             # Mise à jour des statistiques
             elapsed_time = time.monotonic() - start_time
-            stats["avg_response_time"] = (stats["avg_response_time"] * (stats["requests_total"] - 1) + elapsed_time) / stats["requests_total"]
+            if stats["requests_total"] > 0:
+                stats["avg_response_time"] = stats["response_time_sum"] / stats["requests_total"]
+            else:
+                stats["avg_response_time"] = 0  # default value to avoid division by zero
         
             # Mise à jour de la dernière interaction avec paramètres sécurisés
             current_time = datetime.now(timezone.utc).isoformat()
