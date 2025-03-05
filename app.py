@@ -126,22 +126,21 @@ def handle_message(data):
 
 
 def run_process_message(user_id, message):
-    """Exécute process_message en vérifiant l'existence d'une boucle d'événements"""
-    try:
+    """Exécute process_message dans une nouvelle thread avec une boucle asyncio dédiée"""
+    def target():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            # Essayer d'obtenir la boucle d'événements en cours
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
+            loop.run_until_complete(process_message(user_id, message))
+        except Exception as e:
+            logger.error(f"Erreur dans run_process_message: {str(e)}")
+        finally:
+            loop.close()
 
-        if loop and loop.is_running():
-            # Si une boucle est déjà en cours, planifier la tâche
-            asyncio.create_task(process_message(user_id, message))
-        else:
-            # Sinon, exécuter dans une nouvelle boucle asyncio
-            asyncio.run(process_message(user_id, message))
-    except Exception as e:
-        logger.error(f"Erreur dans run_process_message: {str(e)}")
+        import threading
+        t = threading.Thread(target=target)
+        t.daemon = True
+        t.start()
 
 async def process_message(user_id, message):
     """Traite le message de manière asynchrone avec gestion améliorée des erreurs"""
