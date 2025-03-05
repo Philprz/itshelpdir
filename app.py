@@ -120,7 +120,7 @@ def run_process_message(user_id, message):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(process_message(user_id, message))
+        result = loop.run_until_complete(process_message(user_id, message))
     except Exception as e:
         logger.error(f"Erreur dans run_process_message: {str(e)}")
     finally:
