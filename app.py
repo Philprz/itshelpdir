@@ -104,31 +104,23 @@ async def handle_message(data):
             'initializing': True
         })
         return
-    await process_message(user_id, message)
-    await emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
-    # Lancer le wrapper en tâche de fond
-    socketio.start_background_task(run_process_message, user_id, message)
+        
     # Envoi d'un accusé de réception
     emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
     
-def run_process_message(user_id, message):
-    # Définition d'une fonction interne pour exécuter la coroutine dans un nouveau thread
-    def run_in_thread():
-        # Création d'une nouvelle boucle d'événements dédiée à ce thread
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Exécution de la coroutine process_message dans la nouvelle boucle
-            loop.run_until_complete(process_message(user_id, message))
-        except Exception as e:
-            logger.error(f"Erreur dans run_in_thread: {str(e)}")
-        finally:
-            # Fermeture de la boucle pour libérer les ressources
-            loop.close()
+    # Lancer le traitement directement de manière asynchrone
+    # Pas besoin d'utiliser un thread ou une tâche d'arrière-plan car nous sommes déjà
+    # dans un contexte asynchrone avec socketio
+    try:
+        result = await process_message(user_id, message)
+        # Si process_message renvoie un résultat, on peut l'utiliser ici
+    except Exception as e:
+        logger.error(f"Erreur lors du traitement du message: {str(e)}")
+        emit('response', {
+            'message': f"Une erreur est survenue lors du traitement: {str(e)}",
+            'type': 'error'
+        })
     
-    import threading
-    # Démarrage d'un nouveau thread pour exécuter la fonction
-    threading.Thread(target=run_in_thread).start()
 
 
 
