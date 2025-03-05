@@ -166,10 +166,10 @@ async def process_message(user_id, message):
                 # Création d'une nouvelle conversation avec paramètres sécurisés
                 current_time = datetime.now(timezone.utc).isoformat()
                 await db.execute(
-                    """
+                    text("""
                     INSERT INTO conversations (user_id, context, last_updated) 
                     VALUES (:user_id, :context, :updated)
-                    """,
+                    """),
                     {
                         "user_id": user_id,
                         "context": "{}",
