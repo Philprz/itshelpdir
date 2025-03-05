@@ -34,7 +34,7 @@ CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
 socketio = SocketIO(
     app, 
     cors_allowed_origins="*", 
-    async_mode='asyncio',  # Utiliser asyncio pour éviter les conflits d'event loop et corriger l'invalid session
+    async_mode='threading', # Utiliser threading pour éviter les conflits d'event loop
     ping_timeout=30,  # 30 secondes pour le ping timeout
     ping_interval=15,  # 15 secondes pour l'intervalle de ping
     max_http_buffer_size=1024 * 1024,  # 1MB buffer
