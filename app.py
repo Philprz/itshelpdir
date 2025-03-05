@@ -11,6 +11,8 @@ import traceback
 from functools import wraps
 from gevent import monkey
 monkey.patch_all()
+import nest_asyncio
+nest_asyncio.apply()
 from flask import Flask, render_template, request, jsonify, session, current_app
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
@@ -135,11 +137,9 @@ def run_process_message(user_id, message):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(process_message(user_id, message))
+            asyncio.run(process_message(user_id, message))
         except Exception as e:
             logger.error(f"Erreur dans run_process_message: {str(e)}")
-        finally:
-            loop.close()
 
     import threading
     t = threading.Thread(target=target)
