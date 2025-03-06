@@ -214,14 +214,17 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
             for client in all_clients:
                 variation_scores = []
                 for variation in client.variations:
-                    score = fuzz.ratio(message_clean, normalize_string(variation))
+                    ratio_score = fuzz.ratio(message_clean, normalize_string(variation))
+                    partial_score = fuzz.partial_ratio(message_clean, normalize_string(variation))
+                    token_sort_score = fuzz.token_sort_ratio(message_clean, normalize_string(variation))
+                    score = max(ratio_score, partial_score, token_sort_score)
                     variation_scores.append((variation, score))
                     logger.debug(f"Score fuzzy pour {client.client} via {variation}: {score}")
                 
                 highest_score = max(score for _, score in variation_scores)
                 highest_variation = next(var for var, score in variation_scores if score == highest_score)
                 
-                if highest_score >= 80:
+                if highest_score >= 70:
                     logger.info(f"Score élevé trouvé: {client.client} ({highest_score}%) via '{highest_variation}'")
                     if highest_score > best_score:
                         best_score = highest_score

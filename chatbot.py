@@ -316,14 +316,12 @@ class ChatBot:
                 self.logger.error(f"Erreur recherche {source_type}: {str(e)}")
                 return source_type, []
 
-        # Préparation des tâches individuelles
-        tasks = []
-        for source_type, client in clients.items():
-            task = execute_search_for_collection(source_type, client)
-            tasks.append(task)
-
-        # Attente de tous les résultats avec gather
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Utilisation directe des coroutines avec gather sans création de tâches
+        results = await asyncio.gather(
+            *[execute_search_for_collection(source_type, client) 
+            for source_type, client in clients.items()],
+            return_exceptions=True
+        )
 
         # Traitement et fusion des résultats
         combined_results = []
