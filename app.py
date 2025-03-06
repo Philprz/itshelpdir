@@ -113,6 +113,12 @@ def handle_disconnect():
 def handle_message(data):
     # Traitement synchrone
     user_id = data.get('user_id', request.sid)
+    if 'action' in data:
+        action = data.get('action', {})
+        action_type = action.get('type', '')
+        action_value = action.get('value', '')
+        logger.info("Action reçue: %s, value: %s", action_type, action_value)
+    
     message = data.get('message', '')
     logger.info("handle_message déclenché, user_id: %s, message: %s", user_id, message)
     print("handle_message déclenché, data reçues:", data)

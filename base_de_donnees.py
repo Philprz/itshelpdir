@@ -296,6 +296,7 @@ async def init_db():
                         timeout=3.0
                     )
                     logger.info("Database tables created or verified.")
+                    # La vérification suivante est redondante mais conservée pour compatibilité
                     table_exists = await conn.run_sync(lambda c: inspect(c).has_table('conversations'))
                     if not table_exists:
                         await asyncio.wait_for(
