@@ -263,12 +263,8 @@ class ChatBot:
         # Par défaut, retourner toutes les collections
         return list(self.collections.keys())
     
-    async def recherche_coordonnee(self,
-                    collections: List[str],
-                    question: str,
-                    client_info: Optional[Dict] = None,
-                    date_debut: Optional[Any] = None,
-                    date_fin: Optional[Any] = None) -> List[Any]:
+    async def recherche_coordonnee(self, collections: List[str], question: str, client_info: Optional[Dict] = None,
+                              date_debut: Optional[Any] = None, date_fin: Optional[Any] = None) -> List[Any]:
         """
         Coordonne la recherche parallèle sur plusieurs collections.
 
@@ -282,6 +278,7 @@ class ChatBot:
         Returns:
             Liste combinée des résultats pertinents
         """
+        
         self.logger.info(f"Début recherche coordonnée sur {len(collections)} collections")
         start_time = time.monotonic()
 
@@ -316,9 +313,11 @@ class ChatBot:
                 self.logger.error(f"Erreur recherche {source_type}: {str(e)}")
                 return source_type, []
 
-        # Utilisation directe des coroutines avec gather sans création de tâches
-        tasks = [asyncio.create_task(execute_search_for_collection(source_type, client)) for source_type, client in clients.items()]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Exécution séquentielle des recherches
+        results = []
+        for source_type, client in clients.items():
+            result = await execute_search_for_collection(source_type, client)
+            results.append(result)
         # Traitement et fusion des résultats
         combined_results = []
         results_by_source = {}

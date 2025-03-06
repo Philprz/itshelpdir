@@ -178,15 +178,7 @@ class SearchClientFactory:
             return None
     
     async def get_clients(self, source_types: list) -> Dict[str, AbstractSearchClient]:
-        """
-        Récupère plusieurs clients de recherche en parallèle.
-        
-        Args:
-            source_types: Liste des types de sources
-            
-        Returns:
-            Dictionnaire des clients par type
-        """
+        # Solution: utiliser directement les coroutines sans create_task
         tasks = [self.get_client(source_type) for source_type in source_types]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
