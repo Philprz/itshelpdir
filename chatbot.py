@@ -264,11 +264,11 @@ class ChatBot:
         return list(self.collections.keys())
     
     async def recherche_coordonnee(self, 
-                             collections: List[str], 
-                             question: str, 
-                             client_info: Optional[Dict] = None,
-                             date_debut: Optional[Any] = None, 
-                             date_fin: Optional[Any] = None) -> List[Any]:
+                         collections: List[str], 
+                         question: str, 
+                         client_info: Optional[Dict] = None,
+                         date_debut: Optional[Any] = None, 
+                         date_fin: Optional[Any] = None) -> List[Any]:
         """
         Coordonne la recherche parallèle sur plusieurs collections.
         
@@ -288,8 +288,9 @@ class ChatBot:
         # Récupération des clients de recherche
         clients = await search_factory.get_clients(collections)
         
-        # Fonction pour exécuter la recherche sur une collection
-        async def execute_search(source_type: str, client: Any) -> Tuple[str, List[Any]]:
+        # Fonction pour exécuter la recherche sur une collection de manière sécurisée
+        async def safe_execute_search(source_type: str, client: Any) -> Tuple[str, List[Any]]:
+            """Version sécurisée qui capture ses propres exceptions"""
             task_start_time = time.monotonic()
             try:
                 self.logger.info(f"Démarrage recherche {source_type}")
@@ -309,22 +310,13 @@ class ChatBot:
                 self.logger.error(f"Erreur recherche {source_type}: {str(e)}")
                 return source_type, []
         
-        # Exécution des recherches en parallèle
-        # Création des futures pour chaque recherche
-        futures = []
+        # Création des tâches pour chaque recherche
+        search_tasks = []
         for source_type, client in clients.items():
-            future = asyncio.ensure_future(execute_search(source_type, client))
-            futures.append(future)
+            search_tasks.append(safe_execute_search(source_type, client))
 
-        # Attente des résultats avec gestion d'erreur individuelle
-        results = []
-        for future in asyncio.as_completed(futures):
-            try:
-                result = await future
-                results.append(result)
-            except Exception as e:
-                self.logger.error(f"Exception non gérée dans une recherche: {str(e)}")
-
+        # Attente de toutes les tâches avec gather
+        results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
         # Traitement et fusion des résultats
         combined_results = []
