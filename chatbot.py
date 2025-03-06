@@ -263,37 +263,38 @@ class ChatBot:
         # Par défaut, retourner toutes les collections
         return list(self.collections.keys())
     
-    async def recherche_coordonnee(self, 
-                         collections: List[str], 
-                         question: str, 
+    async def recherche_coordonnee(self,
+                         collections: List[str],
+                         question: str,
                          client_info: Optional[Dict] = None,
-                         date_debut: Optional[Any] = None, 
+                         date_debut: Optional[Any] = None,
                          date_fin: Optional[Any] = None) -> List[Any]:
         """
         Coordonne la recherche parallèle sur plusieurs collections.
-        
+
         Args:
             collections: Liste des collections à interroger
             question: Question ou texte à rechercher
             client_info: Informations sur le client (optionnel)
             date_debut: Date de début pour filtrage (optionnel)
             date_fin: Date de fin pour filtrage (optionnel)
-            
+
         Returns:
             Liste combinée des résultats pertinents
         """
         self.logger.info(f"Début recherche coordonnée sur {len(collections)} collections")
+        start_time = time.monotonic()
+
         collections_str = ", ".join(collections)
         self.logger.info(f"Collections ciblées: {collections_str}")
         self.logger.info(f"Question: {question[:100]}{'...' if len(question) > 100 else ''}")
         self.logger.info(f"Client info: {client_info}")
         if date_debut or date_fin:
             self.logger.info(f"Période: {date_debut} → {date_fin}")
-        start_time = time.monotonic()
-        
+
         # Récupération des clients de recherche
         clients = await search_factory.get_clients(collections)
-        
+
         # Fonction pour exécuter la recherche sur une collection de manière sécurisée
         async def safe_execute_search(source_type: str, client: Any) -> Tuple[str, List[Any]]:
             """Version sécurisée qui capture ses propres exceptions"""
@@ -315,11 +316,9 @@ class ChatBot:
             except Exception as e:
                 self.logger.error(f"Erreur recherche {source_type}: {str(e)}")
                 return source_type, []
-        
+
         # Création des tâches pour chaque recherche
-        search_tasks = []
-        for source_type, client in clients.items():
-            search_tasks.append(safe_execute_search(source_type, client))
+        search_tasks = [safe_execute_search(source_type, client) for source_type, client in clients.items()]
 
         # Attente de toutes les tâches avec gather
         results = await asyncio.gather(*search_tasks, return_exceptions=True)
@@ -327,16 +326,16 @@ class ChatBot:
         # Traitement et fusion des résultats
         combined_results = []
         results_by_source = {}
-        
+
         for item in results:
             if isinstance(item, Exception):
                 self.logger.error(f"Exception non gérée dans une recherche: {str(item)}")
                 continue
-                
+
             if isinstance(item, tuple) and len(item) == 2:
                 source_type, res = item
                 results_by_source[source_type] = len(res)
-                
+
                 # Marquage de la source dans les résultats
                 for r in res:
                     if hasattr(r, 'payload'):
@@ -345,37 +344,37 @@ class ChatBot:
                         else:
                             # Cas où payload est un objet Python
                             r.payload.__dict__['source_type'] = source_type
-                
+
                 combined_results.extend(res)
-        
+
         # Tri des résultats par score et déduplication
         combined_results.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
-        
+
         # Déduplication basée sur le contenu
         seen = {}
         unique_results = []
-        
+
         for res in combined_results:
             if not hasattr(res, 'payload'):
                 continue
-                
+
             payload = res.payload if isinstance(res.payload, dict) else res.payload.__dict__
             content = str(payload.get('content', '') or payload.get('text', ''))
-            
+
             # Utilisation d'un hash du contenu pour la déduplication
             content_hash = hashlib.md5(content[:500].encode('utf-8', errors='ignore')).hexdigest()
-            
+
             if content_hash not in seen or res.score > seen[content_hash].score:
                 seen[content_hash] = res
-                
+
         # Conversion en liste et limitation
         final_results = list(seen.values())
         final_results.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
-        
+
         total_time = time.monotonic() - start_time
         self.logger.info(f"Recherche terminée en {total_time:.2f}s - Résultats par source: {results_by_source}")
         self.logger.info(f"Total dedupliqué: {len(final_results)} résultats")
-        
+
         # Limitation à un nombre raisonnable de résultats
         return final_results[:5]
     
