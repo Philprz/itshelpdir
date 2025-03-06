@@ -277,41 +277,21 @@ class ChatBot:
         return list(self.collections.keys())
     
     async def recherche_coordonnee(self, collections: List[str], question: str, client_info: Optional[Dict] = None,
-                              date_debut: Optional[Any] = None, date_fin: Optional[Any] = None) -> List[Any]:
+                               date_debut: Optional[Any] = None, date_fin: Optional[Any] = None) -> List[Any]:
         """
         Coordonne la recherche parallèle sur plusieurs collections.
 
         Args:
-            collections: Liste des collections à interroger
-            question: Question ou texte à rechercher
-            client_info: Informations sur le client (optionnel)
-            date_debut: Date de début pour filtrage (optionnel)
-            date_fin: Date de fin pour filtrage (optionnel)
+            collections: Liste des collections à interroger.
+            question: Question ou texte à rechercher.
+            client_info: Informations sur le client (optionnel).
+            date_debut: Date de début pour filtrage (optionnel).
+            date_fin: Date de fin pour filtrage (optionnel).
 
         Returns:
-            Liste combinée des résultats pertinents
+            Liste combinée des résultats pertinents.
         """
-        # Prioritisation des sources pertinentes selon le contexte
-        analysis = {}
-        # Prioritisation des sources pertinentes selon le contexte
-        priority_sources = analysis.get('search_strategy', {}).get('priority_sources', [])
-        if priority_sources:
-            # Exécuter d'abord les sources prioritaires
-            for source_type in priority_sources:
-                if source_type in clients:
-                    result = await execute_search_for_collection(source_type, clients[source_type])
-                    results.append(result)
-            
-            # Puis exécuter les sources restantes si nécessaire
-            remaining_sources = [s for s in clients.keys() if s not in priority_sources]
-            for source_type in remaining_sources:
-                result = await execute_search_for_collection(source_type, clients[source_type])
-                results.append(result)
-        else:
-            # Comportement par défaut
-            for source_type, client in clients.items():
-                result = await execute_search_for_collection(source_type, client)
-                results.append(result)
+
         self.logger.info(f"Début recherche coordonnée sur {len(collections)} collections")
         start_time = time.monotonic()
 
@@ -324,9 +304,14 @@ class ChatBot:
 
         # Récupération des clients de recherche
         clients = await search_factory.get_clients(collections)
+        results = []
 
-        # Exécute la recherche pour une collection spécifique de façon isolée
+        # Détection de la stratégie de recherche et priorisation des sources
+        analysis = {}  # Analyse contextuelle (peut être alimentée dynamiquement)
+        priority_sources = analysis.get('search_strategy', {}).get('priority_sources', [])
+
         async def execute_search_for_collection(source_type, client):
+            """Exécute la recherche pour une collection spécifique."""
             task_start_time = time.monotonic()
             try:
                 self.logger.info(f"Démarrage recherche {source_type}")
@@ -346,11 +331,22 @@ class ChatBot:
                 self.logger.error(f"Erreur recherche {source_type}: {str(e)}")
                 return source_type, []
 
-        # Exécution séquentielle des recherches
-        results = []
+        # Exécution en fonction de la priorisation
+        executed_sources = set()
+        
+        # Exécuter les sources prioritaires en premier
+        for source_type in priority_sources:
+            if source_type in clients:
+                result = await execute_search_for_collection(source_type, clients[source_type])
+                results.append(result)
+                executed_sources.add(source_type)
+
+        # Exécuter ensuite les autres sources non prioritaires
         for source_type, client in clients.items():
-            result = await execute_search_for_collection(source_type, client)
-            results.append(result)
+            if source_type not in executed_sources:
+                result = await execute_search_for_collection(source_type, client)
+                results.append(result)
+
         # Traitement et fusion des résultats
         combined_results = []
         results_by_source = {}
@@ -380,8 +376,6 @@ class ChatBot:
 
         # Déduplication basée sur le contenu
         seen = {}
-        unique_results = []
-
         for res in combined_results:
             if not hasattr(res, 'payload'):
                 continue
@@ -401,7 +395,7 @@ class ChatBot:
 
         total_time = time.monotonic() - start_time
         self.logger.info(f"Recherche terminée en {total_time:.2f}s - Résultats par source: {results_by_source}")
-        self.logger.info(f"Total dedupliqué: {len(final_results)} résultats")
+        self.logger.info(f"Total dédupliqué: {len(final_results)} résultats")
 
         # Limitation à un nombre raisonnable de résultats
         return final_results[:5]
