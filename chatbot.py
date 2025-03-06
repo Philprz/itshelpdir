@@ -264,11 +264,11 @@ class ChatBot:
         return list(self.collections.keys())
     
     async def recherche_coordonnee(self,
-                         collections: List[str],
-                         question: str,
-                         client_info: Optional[Dict] = None,
-                         date_debut: Optional[Any] = None,
-                         date_fin: Optional[Any] = None) -> List[Any]:
+                    collections: List[str],
+                    question: str,
+                    client_info: Optional[Dict] = None,
+                    date_debut: Optional[Any] = None,
+                    date_fin: Optional[Any] = None) -> List[Any]:
         """
         Coordonne la recherche parallèle sur plusieurs collections.
 
@@ -295,9 +295,8 @@ class ChatBot:
         # Récupération des clients de recherche
         clients = await search_factory.get_clients(collections)
 
-        # Fonction pour exécuter la recherche sur une collection de manière sécurisée
-        async def safe_execute_search(source_type: str, client: Any) -> Tuple[str, List[Any]]:
-            """Version sécurisée qui capture ses propres exceptions"""
+        # Exécute la recherche pour une collection spécifique de façon isolée
+        async def execute_search_for_collection(source_type, client):
             task_start_time = time.monotonic()
             try:
                 self.logger.info(f"Démarrage recherche {source_type}")
@@ -317,11 +316,14 @@ class ChatBot:
                 self.logger.error(f"Erreur recherche {source_type}: {str(e)}")
                 return source_type, []
 
-        # Création des tâches pour chaque recherche
-        search_tasks = [safe_execute_search(source_type, client) for source_type, client in clients.items()]
+        # Préparation des tâches individuelles
+        tasks = []
+        for source_type, client in clients.items():
+            task = execute_search_for_collection(source_type, client)
+            tasks.append(task)
 
-        # Attente de toutes les tâches avec gather
-        results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        # Attente de tous les résultats avec gather
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Traitement et fusion des résultats
         combined_results = []
