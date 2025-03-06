@@ -170,88 +170,68 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
                 logger.warning("Message trop court ou vide")
                 return None, 0.0, {}
 
+            # Normalisation du message pour éviter les problèmes de casse ou d'espaces superflus
             message_clean = normalize_string(message)
             logger.info(f"Message normalisé: {message_clean}")
 
-            # Récupération des clients
+            # Récupération de tous les clients depuis la base de données
             stmt = select(Client)
             result = await session.execute(stmt)
             all_clients = result.scalars().all()
             logger.info(f"Nombre de clients uniques en base: {len(all_clients)}")
 
-            # Recherche exacte avec variations
+            # Recherche exacte : comparer le message avec toutes les variations + le nom principal
             exact_matches = set()
-            client_variations_seen = set()
             for client in all_clients:
-                for variation in client.variations:
+                # Créer la liste des variations à tester en incluant le nom principal
+                variations = client.variations.copy() if client.variations else []
+                variations.append(client.client)
+                for variation in variations:
                     norm_variation = normalize_string(variation)
-                    if norm_variation in message_clean and client.client not in client_variations_seen:
-                        logger.info(f"Match exact trouvé via variation: {client.client} (variation: {variation})")
+                    # Ajouter des espaces pour matcher le mot complet (évite les faux positifs)
+                    if f" {norm_variation} " in f" {message_clean} ":
+                        logger.info(f"Match exact trouvé: {client.client} via variation: {variation}")
                         exact_matches.add(client)
-                        client_variations_seen.add(client.client)
                         break
 
             exact_matches = list(exact_matches)
-            # Vérification stricte en base de données : on ne veut pas de recherche sur des clients qui n'existent pas !
-            result = await session.execute(select(Client).filter(Client.client.in_([c.client for c in exact_matches])))
-            validated_clients = result.scalars().all()
-            exact_matches = [c for c in exact_matches if c.client in [vc.client for vc in validated_clients]]
-
             if len(exact_matches) == 1:
                 client = exact_matches[0]
                 logger.info(f"Un seul match exact: {client.client}")
                 return client.client, 100.0, {"source": client.client}
             elif len(exact_matches) > 1:
                 logger.warning(f"Matches multiples trouvés: {[c.client for c in exact_matches]}")
-                return None, 0.0, {
-                    "ambiguous": True,
-                    "possibilities": [c.client for c in exact_matches]
-                }
+                return None, 0.0, {"ambiguous": True, "possibilities": [c.client for c in exact_matches]}
 
-            # Recherche floue
+            # Si aucune correspondance exacte, effectuer une recherche floue
             logger.info("=== Début recherche floue ===")
-            best_matches = []
+            best_match = None
             best_score = 0
-            
             for client in all_clients:
-                variation_scores = []
-                for variation in client.variations:
-                    ratio_score = fuzz.ratio(message_clean, normalize_string(variation))
-                    partial_score = fuzz.partial_ratio(message_clean, normalize_string(variation))
-                    token_sort_score = fuzz.token_sort_ratio(message_clean, normalize_string(variation))
+                variations = client.variations.copy() if client.variations else []
+                variations.append(client.client)
+                for variation in variations:
+                    norm_variation = normalize_string(variation)
+                    ratio_score = fuzz.ratio(message_clean, norm_variation)
+                    partial_score = fuzz.partial_ratio(message_clean, norm_variation)
+                    token_sort_score = fuzz.token_sort_ratio(message_clean, norm_variation)
                     score = max(ratio_score, partial_score, token_sort_score)
-                    variation_scores.append((variation, score))
-                    logger.debug(f"Score fuzzy pour {client.client} via {variation}: {score}")
-                
-                highest_score = max(score for _, score in variation_scores)
-                highest_variation = next(var for var, score in variation_scores if score == highest_score)
-                
-                if highest_score >= 70:
-                    logger.info(f"Score élevé trouvé: {client.client} ({highest_score}%) via '{highest_variation}'")
-                    if highest_score > best_score:
-                        best_score = highest_score
-                        best_matches = [client]
-                    elif highest_score >= best_score - 5:
-                        best_matches.append(client)
+                    logger.debug(f"Score fuzzy pour {client.client} via '{variation}': {score}")
+                    if score > best_score:
+                        best_score = score
+                        best_match = client
 
-            if best_matches:
-                if len(best_matches) == 1:
-                    client = best_matches[0]
-                    logger.info(f"Meilleur match fuzzy unique: {client.client} ({best_score}%)")
-                    return client.client, best_score, {"source": client.client}
-                else:
-                    logger.warning(f"Matches fuzzy multiples: {[c.client for c in best_matches]}")
-                    return None, 0.0, {
-                        "ambiguous": True,
-                        "possibilities": [c.client for c in best_matches]
-                    }
-
-            logger.warning("Aucun match trouvé")
-            return None, 0.0, {}
+            if best_match and best_score >= 70:
+                logger.info(f"Meilleur match fuzzy: {best_match.client} ({best_score}%)")
+                return best_match.client, best_score, {"source": best_match.client}
+            else:
+                logger.warning("Aucun match trouvé")
+                return None, 0.0, {}
 
         except Exception as e:
             logger.error(f"Erreur dans extract_client_name: {str(e)}", exc_info=True)
             return None, 0.0, {}
+
 
 async def validate_message(message: str) -> bool:
     try:

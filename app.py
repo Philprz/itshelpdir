@@ -307,7 +307,10 @@ def _do_initialize():
                     
                     # Lancer l'initialisation de la BD en arrière-plan
                     new_loop.create_task(init_db())
-                    
+                    # Appel de l'initialisation des clients
+                    from gestion_clients import initialize_clients_with_validation
+                    new_loop.create_task(initialize_clients_with_validation())
+                    logger.info("Initialisation des clients lancée")
                 except Exception as e:
                     logger.critical(f"Erreur initialisation chatbot: {str(e)}")
                     logger.critical(traceback.format_exc())
