@@ -263,18 +263,28 @@ def initialize():
     else:
         _do_initialize()
         
+async def verify_clients_loaded():
+    try:
+        from sqlalchemy import func, select
+        from base_de_donnees import SessionLocal, Client
+        async with SessionLocal() as session:
+            result = await session.execute(select(func.count()).select_from(Client))
+            count = result.scalar()
+            logger.info(f"Base clients initialisée avec {count} entrées")
+    except Exception as e:
+        logger.error(f"Échec vérification clients: {str(e)}")
 
 def _do_initialize():
-    """Effectue l'initialisation dans le contexte de l'application"""
     global chatbot, _is_initialized, _initialization_started, _db_initialized
     
     app.config['start_time'] = time.time()
     _initialization_started = True
     
-    # Marquer la BD comme initialisée même avant l'initialisation
+    # Marquer la BD comme initialisée
     _db_initialized = True
-    
-    # Lancer l'initialisation dans un thread séparé avec timeout global
+
+
+# Lancer l'initialisation dans un thread séparé avec timeout global
     import threading
     def async_init():
         global _is_initialized, chatbot

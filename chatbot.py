@@ -144,6 +144,19 @@ class ChatBot:
             }"""
             
         try:
+            # Ajout d'une analyse locale pour éviter l'erreur
+            search_context = {}
+            # Modifié pour mieux détecter une référence client
+            if search_context.get("has_client"):
+                client_name, score, client_details = await extract_client_name(text)
+                # Ajout d'une recherche spécifique pour les mots simples
+                if not client_name and re.search(r'\b[A-Za-z]{4,}\b', text):
+                    potential_clients = re.findall(r'\b[A-Za-z]{4,}\b', text)
+                    for potential in potential_clients:
+                        test_name, test_score, test_details = await extract_client_name(potential)
+                        if test_name:
+                            client_name, score, client_details = test_name, test_score, test_details
+                            break
             # Détection rapide des catégories
             is_config_request = any(k in text.lower() for k in ['configur', 'paramèt', 'workflow', 'personnalis', 'custom'])
             is_doc_request = any(k in text.lower() for k in ['documentation', 'tutoriel', 'manuel', 'comment faire'])
@@ -278,7 +291,27 @@ class ChatBot:
         Returns:
             Liste combinée des résultats pertinents
         """
-        
+        # Prioritisation des sources pertinentes selon le contexte
+        analysis = {}
+        # Prioritisation des sources pertinentes selon le contexte
+        priority_sources = analysis.get('search_strategy', {}).get('priority_sources', [])
+        if priority_sources:
+            # Exécuter d'abord les sources prioritaires
+            for source_type in priority_sources:
+                if source_type in clients:
+                    result = await execute_search_for_collection(source_type, clients[source_type])
+                    results.append(result)
+            
+            # Puis exécuter les sources restantes si nécessaire
+            remaining_sources = [s for s in clients.keys() if s not in priority_sources]
+            for source_type in remaining_sources:
+                result = await execute_search_for_collection(source_type, clients[source_type])
+                results.append(result)
+        else:
+            # Comportement par défaut
+            for source_type, client in clients.items():
+                result = await execute_search_for_collection(source_type, client)
+                results.append(result)
         self.logger.info(f"Début recherche coordonnée sur {len(collections)} collections")
         start_time = time.monotonic()
 

@@ -151,12 +151,14 @@ async def get_all_clients() -> List[Client]:
 async def get_client_by_name(client_name: str) -> Optional[Client]:
     async with SessionLocal() as session:
         normalized_name = normalize_string(client_name)
+        # Recherche plus permissive pour "rondot" dans "client rondot" par exemple
+        exact_matches = []
         result = await session.execute(
             select(Client).filter(
-                func.upper(Client.client).like(f"%{normalized_name}%")
+                func.upper(Client.client).contains(normalized_name)
             )
         )
-        return result.scalar_one_or_none()
+        exact_matches = result.scalars().all()
 
 def client_exists(client_name: str) -> bool:
     return get_client_by_name(client_name) is not None
