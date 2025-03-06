@@ -283,6 +283,12 @@ class ChatBot:
             Liste combinée des résultats pertinents
         """
         self.logger.info(f"Début recherche coordonnée sur {len(collections)} collections")
+        collections_str = ", ".join(collections)
+        self.logger.info(f"Collections ciblées: {collections_str}")
+        self.logger.info(f"Question: {question[:100]}{'...' if len(question) > 100 else ''}")
+        self.logger.info(f"Client info: {client_info}")
+        if date_debut or date_fin:
+            self.logger.info(f"Période: {date_debut} → {date_fin}")
         start_time = time.monotonic()
         
         # Récupération des clients de recherche
@@ -300,11 +306,11 @@ class ChatBot:
                     date_debut=date_debut,
                     date_fin=date_fin
                 )
-                
+
                 duration = time.monotonic() - task_start_time
                 scores = [f'{r.score:.2f}' for r in results[:3]] if results else []
                 self.logger.info(f"{source_type}: {len(results)} résultats en {duration:.2f}s (scores: {scores})")
-                
+
                 return source_type, results
             except Exception as e:
                 self.logger.error(f"Erreur recherche {source_type}: {str(e)}")
