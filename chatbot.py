@@ -290,6 +290,7 @@ class ChatBot:
         
         # Fonction pour exécuter la recherche sur une collection
         async def execute_search(source_type: str, client: Any) -> Tuple[str, List[Any]]:
+            task_start_time = time.monotonic()
             try:
                 self.logger.info(f"Démarrage recherche {source_type}")
                 results = await client.recherche_intelligente(
@@ -299,7 +300,7 @@ class ChatBot:
                     date_fin=date_fin
                 )
                 
-                duration = time.monotonic() - start_time
+                duration = time.monotonic() - task_start_time
                 scores = [f'{r.score:.2f}' for r in results[:3]] if results else []
                 self.logger.info(f"{source_type}: {len(results)} résultats en {duration:.2f}s (scores: {scores})")
                 
@@ -309,11 +310,20 @@ class ChatBot:
                 return source_type, []
         
         # Exécution des recherches en parallèle
-        tasks = []
+        # Création des futures pour chaque recherche
+        futures = []
         for source_type, client in clients.items():
-            task = asyncio.create_task(execute_search(source_type, client))
-            tasks.append(task)
-        results = await asyncio.gather(*tasks)
+            future = asyncio.ensure_future(execute_search(source_type, client))
+            futures.append(future)
+
+        # Attente des résultats avec gestion d'erreur individuelle
+        results = []
+        for future in asyncio.as_completed(futures):
+            try:
+                result = await future
+                results.append(result)
+            except Exception as e:
+                self.logger.error(f"Exception non gérée dans une recherche: {str(e)}")
 
 
         # Traitement et fusion des résultats
