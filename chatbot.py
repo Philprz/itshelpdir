@@ -763,7 +763,8 @@ class ChatBot:
             # Timeout global pour limiter le temps de traitement
             async with asyncio.timeout(45):  # 45 secondes max pour le traitement complet
             # Analyse de la question pour déterminer le contexte et la stratégie
-                analysis = await self.analyze_question(text)
+                analysis = await asyncio.wait_for(self.analyze_question(text), timeout=45)
+
             if not analysis or not isinstance(analysis, dict):
                 return {
                     "text": "Je n'ai pas pu analyser votre question. Pourriez-vous la reformuler ?",
