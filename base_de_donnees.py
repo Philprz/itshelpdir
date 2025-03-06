@@ -285,25 +285,24 @@ async def init_db():
                 logger.info("Database connection successful.")
             except Exception as conn_err:
                 logger.warning(f"Database connection check skipped: {str(conn_err)}")
-                # Continuer malgré l'erreur pour permettre la création en fallback
                 os.makedirs('data', exist_ok=True)
 
             # Création des tables avec timeout court
             try:
                 async with engine.begin() as conn:
                     await asyncio.wait_for(
-                        conn.run_sync(Base.metadata.create_all),
+                        # Modification ici : utilisation de checkfirst=True pour éviter de recréer des tables existantes
+                        conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True)),
                         timeout=3.0
                     )
                     logger.info("Database tables created or verified.")
             except asyncio.TimeoutError:
                 logger.warning("Database table creation timeout - continuing with minimal setup")
-                # Continuer l'initialisation même en cas de timeout
                 
     except (asyncio.TimeoutError, Exception) as e:
         logger.error(f"Error during database initialization: {str(e)}")
-        # Marquer la base comme initialisée pour permettre le fonctionnement
         return
+
 def create_sqlite_functions(conn):
     def normalize_string(s):
         if s is None:
