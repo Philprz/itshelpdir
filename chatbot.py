@@ -317,12 +317,8 @@ class ChatBot:
                 return source_type, []
 
         # Utilisation directe des coroutines avec gather sans création de tâches
-        results = await asyncio.gather(
-            *[execute_search_for_collection(source_type, client) 
-            for source_type, client in clients.items()],
-            return_exceptions=True
-        )
-
+        tasks = [asyncio.create_task(execute_search_for_collection(source_type, client)) for source_type, client in clients.items()]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         # Traitement et fusion des résultats
         combined_results = []
         results_by_source = {}
