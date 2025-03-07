@@ -161,7 +161,6 @@ async def process_message(user_id, message):
         # Création d'une session dédiée à la conversation
         async with SessionLocal() as db:
             # Récupération ou création de la conversation
-            # Utilisation de paramètres de requête pour éviter les injections SQL
             result = await db.execute(
                 text("SELECT * FROM conversations WHERE user_id = :user_id"),
                 {"user_id": user_id}
@@ -169,7 +168,7 @@ async def process_message(user_id, message):
             conversation = result.fetchone()
         
             if not conversation:
-                # Création d'une nouvelle conversation avec paramètres sécurisés
+                # Création d'une nouvelle conversation
                 current_time = datetime.now(timezone.utc).isoformat()
                 await db.execute(
                     text("""
@@ -193,15 +192,40 @@ async def process_message(user_id, message):
         
             # Traitement du message par le chatbot
             response = await chatbot.process_web_message(message, conversation, user_id)
+            
+            # Mise à jour du contexte avec les résultats de recherche
+            try:
+                context = json.loads(conversation.context) if conversation.context else {}
+                # Mise à jour du contexte avec les derniers résultats
+                if hasattr(chatbot, '_last_search_results'):
+                    context['last_results'] = chatbot._last_search_results
+                # Mettre à jour le contexte dans la base de données
+                await db.execute(
+                    text("""
+                    UPDATE conversations 
+                    SET context = :context, last_updated = :updated_time
+                    WHERE user_id = :user_id
+                    """),
+                    {
+                        "context": json.dumps(context),
+                        "updated_time": datetime.now(timezone.utc).isoformat(),
+                        "user_id": user_id
+                    }
+                )
+                await db.commit()
+            except Exception as ctx_err:
+                logger.error(f"Erreur mise à jour contexte: {str(ctx_err)}")
         
             # Mise à jour des statistiques
             elapsed_time = time.monotonic() - start_time
+            stats["requests_total"] = stats.get("requests_total", 0) + 1
+            stats["response_time_sum"] = stats.get("response_time_sum", 0) + elapsed_time
             if stats["requests_total"] > 0:
                 stats["avg_response_time"] = stats["response_time_sum"] / stats["requests_total"]
             else:
-                stats["avg_response_time"] = 0  # default value to avoid division by zero
+                stats["avg_response_time"] = 0
         
-            # Mise à jour de la dernière interaction avec paramètres sécurisés
+            # Mise à jour de la dernière interaction
             current_time = datetime.now(timezone.utc).isoformat()
             await db.execute(
                 text("""
@@ -235,9 +259,11 @@ async def process_message(user_id, message):
         }
         
         logger.error(f"Erreur traitement message: {str(e)}\n{traceback.format_exc()}")
-        stats["error_count"] += 1
+        stats["error_count"] = stats.get("error_count", 0) + 1
         
         # Conservation des 10 dernières erreurs
+        if "last_errors" not in stats:
+            stats["last_errors"] = []
         stats["last_errors"].append(error_details)
         if len(stats["last_errors"]) > 10:
             stats["last_errors"].pop(0)

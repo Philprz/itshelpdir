@@ -277,21 +277,10 @@ class ChatBot:
         return list(self.collections.keys())
     
     async def recherche_coordonnee(self, collections: List[str], question: str, client_info: Optional[Dict] = None,
-                               date_debut: Optional[Any] = None, date_fin: Optional[Any] = None) -> List[Any]:
+                           date_debut: Optional[Any] = None, date_fin: Optional[Any] = None) -> List[Any]:
         """
         Coordonne la recherche parallèle sur plusieurs collections.
-
-        Args:
-            collections: Liste des collections à interroger.
-            question: Question ou texte à rechercher.
-            client_info: Informations sur le client (optionnel).
-            date_debut: Date de début pour filtrage (optionnel).
-            date_fin: Date de fin pour filtrage (optionnel).
-
-        Returns:
-            Liste combinée des résultats pertinents.
         """
-
         self.logger.info(f"Début recherche coordonnée sur {len(collections)} collections")
         start_time = time.monotonic()
 
@@ -396,6 +385,9 @@ class ChatBot:
         total_time = time.monotonic() - start_time
         self.logger.info(f"Recherche terminée en {total_time:.2f}s - Résultats par source: {results_by_source}")
         self.logger.info(f"Total dédupliqué: {len(final_results)} résultats")
+
+        # Stocker les résultats pour référence future (ajout pour résoudre l'erreur)
+        self._last_search_results = final_results
 
         # Limitation à un nombre raisonnable de résultats
         return final_results[:5]
