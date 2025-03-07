@@ -361,10 +361,7 @@ async def update_db_structure():
             logger.error(f"Erreur lors de la mise à jour de la structure: {str(e)}")
             raise
 
-def setup_test_db(engine):
-    # Configuration d'une base de test (à utiliser dans un contexte de test)
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+
 
 class BaseRepository(ABC):
     def __init__(self, session: AsyncSession):
