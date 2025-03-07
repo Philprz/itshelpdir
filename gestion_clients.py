@@ -63,7 +63,14 @@ async def importer_clients_csv(session: AsyncSession, fichier: str = "ListeClien
             rapport["status"] = "error"
             rapport["errors"].append("Impossible de lire le fichier avec les encodages supportés")
             return rapport
+        # Déduplications des clients par nom
+        unique_clients = {}
+        for client in clients_importes:
+            if client.client not in unique_clients:
+                unique_clients[client.client] = client
 
+        clients_importes = list(unique_clients.values())
+        logger.info(f"Après déduplication: {len(clients_importes)} clients uniques")
         # Réinitialisation du pointeur de fichier
         with open(fichier, 'r', encoding=encoding) as f:
             lecteur = csv.DictReader(f, delimiter=dialect.delimiter)
@@ -201,7 +208,10 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
                 return client.client, 100.0, {"source": client.client}
             elif len(exact_matches) > 1:
                 logger.warning(f"Matches multiples trouvés: {[c.client for c in exact_matches]}")
-                return None, 0.0, {"ambiguous": True, "possibilities": [c.client for c in exact_matches]}
+                # Sélectionner le premier match en cas de doublons
+                client = exact_matches[0]
+                logger.info(f"Sélection du premier match en cas de doublons: {client.client}")
+                return client.client, 100.0, {"source": client.client}
 
             # Si aucune correspondance exacte, effectuer une recherche floue
             logger.info("=== Début recherche floue ===")
@@ -231,6 +241,7 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
         except Exception as e:
             logger.error(f"Erreur dans extract_client_name: {str(e)}", exc_info=True)
             return None, 0.0, {}
+
 
 
 async def validate_message(message: str) -> bool:

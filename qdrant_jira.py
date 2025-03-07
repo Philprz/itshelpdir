@@ -1327,10 +1327,13 @@ class QdrantJiraSearch(BaseQdrantSearch):
                             client_value = client_name.get("source", "")
                             self.logger.info(f"Client_Value: {client_value}")
                             if client_value:
+                                # Utiliser une recherche insensible à la casse
+                                client_value = str(client_value).upper()
+                                self.logger.info(f"Filtre client normalisé: {client_value}")
                                 must_conditions.append(
                                     FieldCondition(
                                         key="client",
-                                        match=MatchValue(value=str(client_value))
+                                        match=MatchValue(value=client_value)
                                     )
                                 )
 
