@@ -1,24 +1,29 @@
 # base_de_donnees.py
-import os
-import re
 import asyncio
 import logging
-import weakref
+import os
+import re
 import uuid
-import sqlite3
-import aiosqlite
+import weakref
 
-from sqlalchemy import (Column, Integer, String, Text, DateTime, JSON, inspect, 
-    Float, Boolean, Index, select, event, Engine)
-from sqlalchemy.orm import declarative_base
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from datetime import datetime, timezone
-from sqlalchemy.sql import func
+import aiosqlite
+import sqlite3
+
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, Any
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import List, Dict, Optional, Any
+
+from sqlalchemy import (
+    Column, Integer, String, Text, DateTime, JSON, inspect,
+    Float, Boolean, Index, select, event, Engine
+)
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.sql import func
 
 from configuration import config, logger
+
 
 def normalize_string(s: str) -> str:
     """Normalise une chaîne de caractères en majuscules sans caractères spéciaux"""
@@ -290,22 +295,26 @@ async def init_db():
             # Création des tables avec timeout court
             async with engine.begin() as conn:
                 try:
-                    await asyncio.wait_for(
-                        conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True)),
-                        timeout=3.0
-                    )
-                    logger.info("Database tables created or verified.")
+                    # Vérifier si la table existe déjà
+                    inspector = inspect(conn)
+                    if not inspector.has_table('conversations'):
+                        await asyncio.wait_for(
+                            conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True)),
+                            timeout=3.0
+                        )
+                        logger.info("Database tables created or verified.")
+                    else:
+                        logger.info("Table 'conversations' already exists, skipping creation.")
                 except sqlite3.OperationalError as e:
-                    if "already exists" in str(e): 
-                        logger.info("Table already exists, skipping creation.") 
-                    else: 
+                    if "already exists" in str(e):
+                        logger.info("Table already exists, skipping creation.")
+                    else:
                         raise
-                        
-                    logger.info("Database tables created or verified.")
-                
+
     except (asyncio.TimeoutError, Exception) as e:
         logger.error(f"Error during database initialization: {str(e)}")
         return
+
 
 def create_sqlite_functions(conn):
     def normalize_string(s):
