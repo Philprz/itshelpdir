@@ -64,15 +64,16 @@ class QdrantZendeskSearch(BaseQdrantSearch):
             score_percent = round(score * 100)
             fiabilite = "🟢" if score_percent > 80 else "🟡" if score_percent > 60 else "🔴"
 
-            # Nettoyage et troncature des contenus
+            # Nettoyage et troncature des contenu
+
             content = str(payload.get('content', ''))
             if len(content) > 800:
                 content = content[:797] + "..."
 
             # Construction du message
             message = (
-                f"*ZENDESK-{payload['ticket_id']}* - {payload['summary']}\n"
-                f"Client: {payload['client']} - {fiabilite} {score_percent}%\n"
+                f"*ZENDESK-{normalized_payload['ticket_id']} - {normalized_payload['summary']}\n"
+                f"Client: {normalized_payload['client']} - {fiabilite} {score_percent}%\n"
                 f"Status: {payload.get('status', 'En cours')}\n"
                 f"Agent: {payload.get('assignee', 'Non assigné')}\n"
                 f"Créé le: {created_str} - Maj: {updated_str}\n"
