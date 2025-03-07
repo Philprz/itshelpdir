@@ -184,7 +184,7 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
             exact_matches = set()
             for client in all_clients:
                 # Créer la liste des variations à tester en incluant le nom principal
-                variations = client.variations.copy() if client.variations else []
+                variations = list(client.variations.copy() if client.variations else [])
                 variations.append(client.client)
                 for variation in variations:
                     norm_variation = normalize_string(variation)

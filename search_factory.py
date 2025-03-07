@@ -86,12 +86,18 @@ class SearchClientFactory:
             
         return client_types
             
-    async def get_client(self, source_type: str):
+    async def get_clients(self, source_types: list) -> Dict[str, AbstractSearchClient]:
         """Récupère ou crée un client de recherche pour le type demandé"""
         # Vérification de l'initialisation
         if not self.initialized:
             await self.initialize()
-            
+            clients = {}
+            for source_type in source_types:
+                client = await self.get_client(source_type)
+                if client:
+                    clients[source_type] = client
+                    
+            return clients
         # Normalisation du type
         source_type = source_type.lower()
         
