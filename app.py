@@ -134,15 +134,12 @@ def handle_message(data):
             'initializing': True
         })
         # Passer le mode au traitement
-        socketio.start_background_task(run_process_message, user_id, message, mode)
-        return
         
+        return
+    socketio.start_background_task(run_process_message, user_id, message, mode)    
     # Envoi d'un accusé de réception
     emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
     
-    # Utiliser une tâche de fond SocketIO pour le traitement asynchrone
-    socketio.start_background_task(run_process_message, user_id, message)
-
 
 def run_process_message(user_id, message, mode):
     def target():
