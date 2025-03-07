@@ -295,19 +295,10 @@ async def init_db():
             # Création des tables avec timeout court
             async with engine.begin() as conn:
                 try:
-                    # Vérifier si la table existe déjà
-                    table_exists = await conn.run_sync(lambda conn: inspect(conn).has_table('conversations'))
-                    if not table_exists:
-
-                        await conn.run_sync(lambda conn: inspect(conn).has_table('conversations'))
-                    if not await conn.run_sync(lambda conn: inspect(conn).has_table('conversations')):
-                        await asyncio.wait_for(
-                            conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True)),
-                            timeout=3.0
-                        )
-                        logger.info("Database tables created or verified.")
-                    else:
-                        logger.info("Table 'conversations' already exists, skipping creation.")
+                    # Utiliser .create_all() avec l'option checkfirst explicitement définie
+                    await conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True))
+                    logger.info("Database tables created or verified.")
+                    
                 except sqlite3.OperationalError as e:
                     if "already exists" in str(e):
                         logger.info("Table already exists, skipping creation.")
