@@ -805,7 +805,7 @@ class ChatBot:
             # Si c'est une commande spéciale, traitement approprié
             if text.startswith('/'):
                 return await self._process_command(text[1:], conversation, user_id)
-                
+
             # Vérification si salutation
             if await self.is_greeting(text):
                 return {
@@ -815,123 +815,132 @@ class ChatBot:
                         "text": {"type": "mrkdwn", "text": "Bonjour, comment puis-je vous aider ?"}
                     }]
                 }
+
             # Timeout global pour limiter le temps de traitement
             async with asyncio.timeout(45):  # 45 secondes max pour le traitement complet
-            # Analyse de la question pour déterminer le contexte et la stratégie
+                # Analyse de la question pour déterminer le contexte et la stratégie
                 analysis = await asyncio.wait_for(self.analyze_question(text), timeout=45)
 
-            if not analysis or not isinstance(analysis, dict):
-                return {
-                    "text": "Je n'ai pas pu analyser votre question. Pourriez-vous la reformuler ?",
-                    "blocks": [{
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": "Je n'ai pas pu analyser votre question. Pourriez-vous la reformuler ?"}
-                    }]
-                }
-            
-            # Extraction du client
-            client_info = None
-            search_context = analysis.get("search_context", {})
-            if search_context.get("has_client"):
-                client_name, score, client_details = await extract_client_name(text)
-                if client_details and client_details.get("ambiguous"):
-                    possibilities = client_details.get("possibilities", [])
+                if not analysis or not isinstance(analysis, dict):
                     return {
-                        "text": f"Plusieurs clients possibles : {', '.join(possibilities)}. Pouvez-vous préciser ?",
+                        "text": "Je n'ai pas pu analyser votre question. Pourriez-vous la reformuler ?",
                         "blocks": [{
                             "type": "section",
-                            "text": {"type": "mrkdwn", "text": f"Plusieurs clients possibles : {', '.join(possibilities)}. Pouvez-vous préciser ?"}
+                            "text": {"type": "mrkdwn", "text": "Je n'ai pas pu analyser votre question. Pourriez-vous la reformuler ?"}
                         }]
                     }
-                if client_name:
-                    client_info = {"source": client_name}
-                    self.logger.info(f"Client trouvé: {client_name}")
-            
-            # Gestion des dates
-            date_debut, date_fin = None, None
-            temporal_info = search_context.get("temporal_info", {})
-            
-            if temporal_info.get("start_timestamp"):
-                try:
-                    date_debut = datetime.fromtimestamp(temporal_info["start_timestamp"], tz=timezone.utc)
-                except:
-                    pass
-                
-            if temporal_info.get("end_timestamp"):
-                try:
-                    date_fin = datetime.fromtimestamp(temporal_info["end_timestamp"], tz=timezone.utc)
-                    date_fin = date_fin.replace(hour=23, minute=59, second=59, microsecond=999999)
-                except:
-                    pass
-            
-            # Détermination des collections à utiliser
-            collections = self.determine_collections(analysis)
-            self.logger.info(f"Collections sélectionnées: {collections}")
-            
-            # Exécution des recherches coordonnées
-            resultats = await self.recherche_coordonnee(
-                collections=collections,
-                question=text,
-                client_info=client_info,
-                date_debut=date_debut,
-                date_fin=date_fin
-            )
-            
-            if not resultats:
-                return {
-                    "text": "Désolé, je n'ai trouvé aucun résultat pertinent pour votre question.",
-                    "blocks": [{
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": "Désolé, je n'ai trouvé aucun résultat pertinent pour votre question."}
-                    }]
-                }
-            
-            # Modification ici: afficher un résumé par défaut au lieu du mode détaillé
-            # Génération d'un résumé concis
-            summary = await self.generate_summary(resultats, text)
-            
-            # Préparation des boutons pour changer de mode
-            action_buttons = {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "🔍 Détails",
-                            "emoji": True
-                        },
-                        "value": f"details:{text}"
-                    },
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "📋 Guide",
-                            "emoji": True
-                        },
-                        "value": f"guide:{text}"
+
+                # Extraction du client
+                client_info = None
+                search_context = analysis.get("search_context", {})
+                if search_context.get("has_client"):
+                    client_name, score, client_details = await extract_client_name(text)
+                    if client_details and client_details.get("ambiguous"):
+                        possibilities = client_details.get("possibilities", [])
+                        return {
+                            "text": f"Plusieurs clients possibles : {', '.join(possibilities)}. Pouvez-vous préciser ?",
+                            "blocks": [{
+                                "type": "section",
+                                "text": {"type": "mrkdwn", "text": f"Plusieurs clients possibles : {', '.join(possibilities)}. Pouvez-vous préciser ?"}
+                            }]
+                        }
+                    if client_name:
+                        client_info = {"source": client_name, "jira": client_name, "zendesk": client_name}
+                        self.logger.info(f"Client trouvé: {client_name}")
+
+                # Tentative d'extraction directe du client si non trouvé par l'analyse
+                if not client_info:
+                    client_name, score, client_details = await extract_client_name(text)
+                    if client_name:
+                        client_info = {"source": client_name, "jira": client_name, "zendesk": client_name}
+                        self.logger.info(f"Client trouvé (méthode directe): {client_name}")
+                    else:
+                        self.logger.info("Aucun client identifié pour cette requête")
+
+                # Gestion des dates
+                date_debut, date_fin = None, None
+                temporal_info = search_context.get("temporal_info", {})
+
+                if temporal_info.get("start_timestamp"):
+                    try:
+                        date_debut = datetime.fromtimestamp(temporal_info["start_timestamp"], tz=timezone.utc)
+                    except:
+                        pass
+
+                if temporal_info.get("end_timestamp"):
+                    try:
+                        date_fin = datetime.fromtimestamp(temporal_info["end_timestamp"], tz=timezone.utc)
+                        date_fin = date_fin.replace(hour=23, minute=59, second=59, microsecond=999999)
+                    except:
+                        pass
+
+                # Détermination des collections à utiliser
+                collections = self.determine_collections(analysis)
+                self.logger.info(f"Collections sélectionnées: {collections}")
+
+                # Exécution des recherches coordonnées
+                resultats = await self.recherche_coordonnee(
+                    collections=collections,
+                    question=text,
+                    client_info=client_info,
+                    date_debut=date_debut,
+                    date_fin=date_fin
+                )
+
+                if not resultats:
+                    return {
+                        "text": "Désolé, je n'ai trouvé aucun résultat pertinent pour votre question.",
+                        "blocks": [{
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": "Désolé, je n'ai trouvé aucun résultat pertinent pour votre question."}
+                        }]
                     }
-                ]
-            }
-            
-            # Création de la réponse formatée avec le résumé et les boutons
-            return {
-                "text": summary,
-                "blocks": [
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}
-                    },
-                    action_buttons
-                ]
-            }
-            
+
+                # Génération d'un résumé concis
+                summary = await self.generate_summary(resultats, text)
+
+                # Préparation des boutons pour changer de mode
+                action_buttons = {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "🔍 Détails",
+                                "emoji": True
+                            },
+                            "value": f"details:{text}"
+                        },
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "📋 Guide",
+                                "emoji": True
+                            },
+                            "value": f"guide:{text}"
+                        }
+                    ]
+                }
+
+                # Création de la réponse formatée avec le résumé et les boutons
+                return {
+                    "text": summary,
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}
+                        },
+                        action_buttons
+                    ]
+                }
+
         except Exception as e:
             self.logger.error(f"Erreur process_web_message: {str(e)}")
             elapsed_time = time.monotonic() - start_time
             self.logger.error(f"Échec après {elapsed_time:.2f}s")
-            
+
             return {
                 "text": f"Une erreur est survenue pendant le traitement: {str(e)}",
                 "blocks": [{
@@ -939,6 +948,7 @@ class ChatBot:
                     "text": {"type": "mrkdwn", "text": f"Une erreur est survenue pendant le traitement: {str(e)}"}
                 }]
             }
+
             
    
     async def handle_action_button(self, action_type: str, action_value: str, conversation: Any, user_id: str) -> Dict:
