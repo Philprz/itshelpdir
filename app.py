@@ -138,14 +138,17 @@ def handle_message(data):
 
 
 def run_process_message(user_id, message):
-    """Exécute process_message dans une nouvelle thread avec une boucle asyncio dédiée"""
     def target():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            asyncio.run(process_message(user_id, message))
+            # Exécution avec une future pour capture d'erreurs
+            future = asyncio.ensure_future(process_message(user_id, message), loop=loop)
+            loop.run_until_complete(future)
         except Exception as e:
-            logger.error(f"Erreur dans run_process_message: {str(e)}")
+            logger.error(f"Erreur dans run_process_message: {str(e)}", exc_info=True)
+        finally:
+            loop.close()
 
     import threading
     t = threading.Thread(target=target)
@@ -315,8 +318,7 @@ def _do_initialize():
     # Marquer la BD comme initialisée
     _db_initialized = True
 
-
-# Lancer l'initialisation dans un thread séparé avec timeout global
+    # Lancer l'initialisation dans un thread séparé avec timeout global
     import threading
     def async_init():
         global _is_initialized, chatbot
@@ -361,6 +363,7 @@ def _do_initialize():
     init_thread.daemon = True
     init_thread.start()
     logger.info("Thread d'initialisation démarré")
+    
 async def init_minimal_db(engine):
     """Initialisation minimale de la base de données en cas d'urgence"""
     from sqlalchemy.ext.asyncio import AsyncSession

@@ -54,11 +54,7 @@ class EmbeddingService:
         return True
     
     async def get_embedding(self, text: str, force_refresh=False) -> Optional[List[float]]:
-        # Ajout d'un cache L1 pour accélérer les requêtes fréquentes
-        self.l1_cache = {}  # Cache mémoire rapide (in-process)
-        self.l1_cache_ttl = 300  # 5 minutes
-        self.l1_cache_max_size = 100
-        self.l1_cache_timestamps = {}
+
 
         # Vérification du cache L1 (plus rapide)
         cache_key = self._get_cache_key(text)

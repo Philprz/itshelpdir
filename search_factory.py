@@ -9,14 +9,8 @@ from qdrant_client import QdrantClient
 from openai import AsyncOpenAI
 
 from search_base import AbstractSearchClient
-from search_clients import (
-    JiraSearchClient, 
-    ZendeskSearchClient, 
-    ConfluenceSearchClient, 
-    NetsuiteSearchClient,
-    NetsuiteDummiesSearchClient,
-    SapSearchClient
-)
+# Import dynamique pour éviter les imports circulaires
+
 from configuration import logger, global_cache
 from embedding_service import EmbeddingService
 from translation_service import TranslationService
@@ -45,17 +39,97 @@ class SearchClientFactory:
             'netsuite_dummies': os.getenv('QDRANT_COLLECTION_NETSUITE_DUMMIES', 'NETSUITE_DUMMIES'),
             'sap': os.getenv('QDRANT_COLLECTION_SAP', 'SAP')
         }
+    def _get_client_types(self):
+        """Import dynamique des types de clients pour éviter les imports circulaires"""
+        from search_base import AbstractSearchClient
         
-        # Mapping des types de recherche vers les classes
-        self.client_types = {
-            'jira': JiraSearchClient,
-            'zendesk': ZendeskSearchClient,
-            'confluence': ConfluenceSearchClient,
-            'netsuite': NetsuiteSearchClient,
-            'netsuite_dummies': NetsuiteDummiesSearchClient,
-            'sap': SapSearchClient
+        # Création dynamique des classes de recherche pour éviter les imports circulaires
+        class DummySearchClient(AbstractSearchClient):
+            async def format_for_slack(self, result): 
+                return {}
+            def valider_resultat(self, result):
+                return False
+                
+        # Dictionnaire par défaut avec des clients fictifs
+        client_types = {
+            'jira': DummySearchClient,
+            'zendesk': DummySearchClient,
+            'confluence': DummySearchClient,
+            'netsuite': DummySearchClient,
+            'netsuite_dummies': DummySearchClient,
+            'sap': DummySearchClient
         }
-    
+        
+        # Tentative d'import des vrais clients
+        try:
+            from search_clients import (
+                JiraSearchClient, 
+                ZendeskSearchClient, 
+                ConfluenceSearchClient, 
+                NetsuiteSearchClient,
+                NetsuiteDummiesSearchClient,
+                SapSearchClient
+            )
+            
+            # Remplacement par les vrais clients
+            client_types = {
+                'jira': JiraSearchClient,
+                'zendesk': ZendeskSearchClient,
+                'confluence': ConfluenceSearchClient,
+                'netsuite': NetsuiteSearchClient,
+                'netsuite_dummies': NetsuiteDummiesSearchClient,
+                'sap': SapSearchClient
+            }
+            self.logger.info("Classes de clients de recherche importées avec succès")
+        except Exception as e:
+            self.logger.error(f"Erreur import classes clients: {str(e)}")
+            
+        return client_types
+            
+    async def get_client(self, source_type: str):
+        """Récupère ou crée un client de recherche pour le type demandé"""
+        # Vérification de l'initialisation
+        if not self.initialized:
+            await self.initialize()
+            
+        # Normalisation du type
+        source_type = source_type.lower()
+        
+        # Vérification du cache
+        if source_type in self.clients:
+            return self.clients[source_type]
+            
+        # Obtention dynamique des types de clients
+        client_types = self._get_client_types()
+            
+        # Vérification du type supporté
+        if source_type not in client_types:
+            self.logger.warning(f"Type de source non pris en charge: {source_type}")
+            return None
+            
+        # Récupération de la collection
+        collection_name = self.default_collections.get(source_type)
+        if not collection_name:
+            self.logger.warning(f"Pas de collection configurée pour {source_type}")
+            return None
+            
+        # Création du client
+        try:
+            client_class = client_types[source_type]
+            client = client_class(
+                collection_name=collection_name,
+                qdrant_client=self.qdrant_client,
+                embedding_service=self.embedding_service,
+                translation_service=self.translation_service
+            )
+            
+            # Mise en cache
+            self.clients[source_type] = client
+            return client
+            
+        except Exception as e:
+            self.logger.error(f"Erreur création client {source_type}: {str(e)}")
+            return None
     async def initialize(self):
         """Initialisation des services et clients de base."""
         if self.initialized:
@@ -126,75 +200,7 @@ class SearchClientFactory:
                 self.translation_service = None
             # Marquer comme initialisé pour éviter les blocages
             self.initialized = True
-    
-    async def get_client(self, source_type: str) -> Optional[AbstractSearchClient]:
-        """
-        Récupère ou crée un client de recherche pour le type demandé.
         
-        Args:
-            source_type: Type de source de données ('jira', 'zendesk', etc.)
-            
-        Returns:
-            Client de recherche correspondant ou None si non pris en charge
-        """
-        # Vérification de l'initialisation
-        if not self.initialized:
-            await self.initialize()
-            
-        # Normalisation du type
-        source_type = source_type.lower()
-        
-        # Vérification du cache
-        if source_type in self.clients:
-            return self.clients[source_type]
-            
-        # Vérification du type supporté
-        if source_type not in self.client_types:
-            self.logger.warning(f"Type de source non pris en charge: {source_type}")
-            return None
-            
-        # Récupération de la collection
-        collection_name = self.default_collections.get(source_type)
-        if not collection_name:
-            self.logger.warning(f"Pas de collection configurée pour {source_type}")
-            return None
-            
-        # Création du client
-        try:
-            client_class = self.client_types[source_type]
-            client = client_class(
-                collection_name=collection_name,
-                qdrant_client=self.qdrant_client,
-                embedding_service=self.embedding_service,
-                translation_service=self.translation_service
-            )
-            
-            # Mise en cache
-            self.clients[source_type] = client
-            return client
-            
-        except Exception as e:
-            self.logger.error(f"Erreur création client {source_type}: {str(e)}")
-            return None
-    
-    async def get_clients(self, source_types: list) -> Dict[str, AbstractSearchClient]:
-        # S'assurer que le factory est initialisé
-        if not self.initialized:
-            await self.initialize()
-            
-        # Solution: utiliser directement les coroutines sans create_task
-        tasks = [self.get_client(source_type) for source_type in source_types]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        clients = {}
-        for source_type, result in zip(source_types, results):
-            if isinstance(result, Exception):
-                self.logger.error(f"Erreur récupération client {source_type}: {str(result)}")
-            elif result:
-                clients[source_type] = result
-                
-        return clients
-    
     async def search_all(self, question: str, client_name=None, date_debut=None, date_fin=None, limit_per_source=3):
         """
         Effectue une recherche sur toutes les sources disponibles.

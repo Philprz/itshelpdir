@@ -12,6 +12,26 @@ body {
     flex-direction: column;
 }
 
+.input-group .btn-primary {
+    background-color: #284253;
+    border-color: #1a2a3a;
+}
+
+.input-group .btn-primary:hover {
+    background-color: #1a2a3a;
+    border-color: #0d1520;
+}
+
+/* Autres éléments qui utilisaient l'ancien bleu */
+.typing-indicator span {
+    background-color: #284253;
+}
+
+.action-button:hover {
+    background-color: #284253;
+    color: white;
+}
+
 .chat-window {
     flex-grow: 1;
     overflow-y: auto;
@@ -40,7 +60,7 @@ body {
 }
 
 .user-message .message-content {
-    background-color: #007bff;
+    background-color: #284253;  /* Nouvelle couleur bleu foncé */
     color: white;
     border-bottom-right-radius: 5px;
 }
@@ -75,7 +95,7 @@ body {
     height: 10px;
     width: 10px;
     border-radius: 50%;
-    background-color: #007bff;
+    background-color: #284253;
     display: inline-block;
     margin-right: 5px;
     animation: typing 1s infinite;
@@ -153,23 +173,23 @@ pre {
 .form-check-inline {
     margin-right: 15px;
 }
+
 .action-buttons-container {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 10px;
+    margin-top: 15px;
 }
 
 .action-button {
     background-color: #f0f2f5;
     border: 1px solid #dcdfe6;
     border-radius: 4px;
-    padding: 6px 12px;
+    padding: 8px 14px;
     cursor: pointer;
     font-size: 14px;
-    transition: background-color 0.2s;
+    transition: all 0.2s;
 }
 
 .action-button:hover {
-    background-color: #e6e8eb;
+    background-color: #284253;
+    color: white;
+    border-color: #1a2a3a;
 }
