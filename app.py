@@ -168,8 +168,9 @@ def run_process_message(user_id, message, mode):
         finally:
             active_threads.discard(thread_id)
             
-        threading.Thread(target=target, daemon=True).start()
-
+        
+    threading.Thread(target=target, daemon=True).start()
+    logger.info(f"Thread de traitement démarré pour message: {message[:30]}...")
 async def process_message(user_id, message, mode):
     """Traite le message de manière asynchrone avec gestion améliorée des erreurs"""
     start_time = time.monotonic()
