@@ -564,9 +564,9 @@ class ChatBot:
                         formatted_blocks.append({"type": "divider"})
                         continue
                     else:
-                        # Déterminer le type de source à partir du résultat lui-même
+                        # Log et continue avec le prochain résultat sans utiliser le formatage par défaut
                         current_source_type = self._detect_source_type(r)
-                        self.logger.warning(f"Bloc formaté invalide pour {current_source_type}, utilisation du formatage par défaut")
+                        self.logger.warning(f"Bloc formaté invalide ignoré pour {current_source_type}")
                         
                 # Sinon, fallback au formatage de base (code original conservé)
                 score_percent = round(score * 100)

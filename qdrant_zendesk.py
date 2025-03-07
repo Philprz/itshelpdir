@@ -49,7 +49,13 @@ class QdrantZendeskSearch(BaseQdrantSearch):
             if not all(normalized_payload[f] for f in mandatory_fields):
                 missing_fields = [f for f in mandatory_fields if not normalized_payload[f]]
                 self.logger.warning(f"Champs obligatoires manquants ou vides: {missing_fields}")
-                return None
+                return {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*ZENDESK* - Données insuffisantes pour afficher ce résultat"
+                    }
+                }
 
             # Formatage des dates
             created_str, updated_str = self._format_dates(payload)
@@ -457,9 +463,9 @@ class QdrantZendeskSearch(BaseQdrantSearch):
             }
 
             # Validation avec seuils plus souples
-            mandatory_fields = ['id', 'content']
-            if not all(normalized_payload.get(field) for field in mandatory_fields):
-                return False
+            mandatory_fields = ['ticket_id', 'content']  # Utiliser ticket_id au lieu de id
+            if not normalized_payload.get('ticket_id') or not normalized_payload.get('content'):
+                return False  # Vérification simplifiée
 
             return res.score >= 0.4
 
