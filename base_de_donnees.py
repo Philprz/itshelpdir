@@ -296,8 +296,8 @@ async def init_db():
             async with engine.begin() as conn:
                 try:
                     # Vérifier si la table existe déjà
-                    inspector = inspect(conn)
-                    if not inspector.has_table('conversations'):
+                    await conn.run_sync(lambda conn: inspect(conn).has_table('conversations'))
+                    if not await conn.run_sync(lambda conn: inspect(conn).has_table('conversations')):
                         await asyncio.wait_for(
                             conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True)),
                             timeout=3.0
