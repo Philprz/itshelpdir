@@ -159,7 +159,7 @@ async def process_message(user_id, message):
     """Traite le message de manière asynchrone avec gestion améliorée des erreurs"""
     start_time = time.monotonic()
     global stats
-    
+
     try:
         # Création d'une session dédiée à la conversation
         async with SessionLocal() as db:
@@ -169,13 +169,13 @@ async def process_message(user_id, message):
                 {"user_id": user_id}
             )
             conversation = result.fetchone()
-        
+
             if not conversation:
                 # Création d'une nouvelle conversation
                 current_time = datetime.now(timezone.utc).isoformat()
                 await db.execute(
                     text("""
-                    INSERT INTO conversations (user_id, context, last_updated) 
+                    INSERT INTO conversations (user_id, context, last_updated)
                     VALUES (:user_id, :context, :updated)
                     """),
                     {
@@ -185,27 +185,46 @@ async def process_message(user_id, message):
                     }
                 )
                 await db.commit()
-                
+
                 # Récupération de la conversation nouvellement créée
                 result = await db.execute(
                     text("SELECT * FROM conversations WHERE user_id = :user_id"),
                     {"user_id": user_id}
                 )
                 conversation = result.fetchone()
-        
+
             # Traitement du message par le chatbot
             response = await chatbot.process_web_message(message, conversation, user_id)
-            
+
             # Mise à jour du contexte avec les résultats de recherche
             try:
                 context = json.loads(conversation.context) if conversation.context else {}
+
                 # Mise à jour du contexte avec les derniers résultats
                 if hasattr(chatbot, '_last_search_results'):
-                    context['last_results'] = chatbot._last_search_results
+                    # Conversion des objets résultats en dictionnaires sérialisables
+                    serializable_results = []
+                    for result in chatbot._last_search_results:
+                        if hasattr(result, 'payload') and hasattr(result, 'score'):
+                            # Extraire le payload de manière sécurisée
+                            if isinstance(result.payload, dict):
+                                payload = result.payload
+                            else:
+                                payload = result.payload.__dict__ if hasattr(result.payload, '__dict__') else {}
+
+                            # Créer un dictionnaire sérialisable
+                            serializable_result = {
+                                'score': float(result.score),
+                                'payload': payload
+                            }
+                            serializable_results.append(serializable_result)
+
+                    context['last_results'] = serializable_results
+
                 # Mettre à jour le contexte dans la base de données
                 await db.execute(
                     text("""
-                    UPDATE conversations 
+                    UPDATE conversations
                     SET context = :context, last_updated = :updated_time
                     WHERE user_id = :user_id
                     """),
@@ -218,7 +237,7 @@ async def process_message(user_id, message):
                 await db.commit()
             except Exception as ctx_err:
                 logger.error(f"Erreur mise à jour contexte: {str(ctx_err)}")
-        
+
             # Mise à jour des statistiques
             elapsed_time = time.monotonic() - start_time
             stats["requests_total"] = stats.get("requests_total", 0) + 1
@@ -227,12 +246,12 @@ async def process_message(user_id, message):
                 stats["avg_response_time"] = stats["response_time_sum"] / stats["requests_total"]
             else:
                 stats["avg_response_time"] = 0
-        
+
             # Mise à jour de la dernière interaction
             current_time = datetime.now(timezone.utc).isoformat()
             await db.execute(
                 text("""
-                UPDATE conversations 
+                UPDATE conversations
                 SET last_interaction = :interaction_time
                 WHERE user_id = :user_id
                 """),
@@ -242,7 +261,7 @@ async def process_message(user_id, message):
                 }
             )
             await db.commit()
-        
+
             # Envoi de la réponse via SocketIO
             response_size = len(json.dumps(response)) if isinstance(response, dict) else 0
             logger.info(f"Réponse envoyée à {user_id} en {elapsed_time:.2f}s (taille: {response_size/1024:.1f} KB)")
@@ -252,7 +271,7 @@ async def process_message(user_id, message):
                 'type': 'message',
                 'response_time': round(elapsed_time, 2)
             }, room=user_id)
-        
+
     except Exception as e:
         # Journalisation détaillée de l'erreur
         error_details = {
@@ -260,23 +279,24 @@ async def process_message(user_id, message):
             "message": str(e),
             "traceback": traceback.format_exc()
         }
-        
+
         logger.error(f"Erreur traitement message: {str(e)}\n{traceback.format_exc()}")
         stats["error_count"] = stats.get("error_count", 0) + 1
-        
+
         # Conservation des 10 dernières erreurs
         if "last_errors" not in stats:
             stats["last_errors"] = []
         stats["last_errors"].append(error_details)
         if len(stats["last_errors"]) > 10:
             stats["last_errors"].pop(0)
-            
+
         # Envoi d'un message d'erreur formaté
         socketio.emit('response', {
             'message': f"Erreur lors du traitement: {str(e)}",
             'type': 'error',
             'error_id': stats["error_count"]
         }, room=user_id)
+
 def ensure_initialization():
     """S'assure que l'initialisation est lancée dans le contexte de l'application"""
     global _initialization_started
