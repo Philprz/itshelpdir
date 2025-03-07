@@ -192,14 +192,16 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
             for client in all_clients:
                 variations = list(client.variations.copy() if hasattr(client, 'variations') and client.variations else [])
                 variations.append(client.client)
-
+                # La recherche vérifie si le nom du client est un mot complet du message
+                # et non une sous-chaîne quelconque
                 for variation in variations:
                     norm_variation = normalize_string(variation)
-                    # Vérification simple si le nom du client est dans le message
-                    if norm_variation and norm_variation in message_clean:
-                        logger.info(f"Match trouvé: {client.client} via {variation}")
-                        exact_matches.append(client)
-                        break
+                    words = message_clean.split()
+                    for word in words:
+                        if word == norm_variation or norm_variation == word:
+                            logger.info(f"Match trouvé: {client.client} via {variation} (mot: {word})")
+                            exact_matches.append(client)
+                            break
 
             if len(exact_matches) == 1:
                 client = exact_matches[0]
@@ -231,7 +233,8 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
                         best_score = score
                         best_match = client
 
-            if best_match and best_score >= 70:
+            # Réduire le seuil pour améliorer la détection
+            if best_match and best_score >= 60:
                 logger.info(f"Match flou: {best_match.client} ({best_score}%)")
                 return best_match.client, best_score, {"source": best_match.client}
 

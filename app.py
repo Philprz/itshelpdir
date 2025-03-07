@@ -99,10 +99,9 @@ def index():
 
 @socketio.on('connect')
 def handle_connect():
-    print("handle_connect: tentative de connexion SocketIO")
     """Gestion de la connexion SocketIO"""
     logger.info(f"Client connecté: {request.sid}")
-    emit('response', {'message': 'Connexion établie avec ITS Help'})
+    # Ne pas envoyer de message automatique pour éviter les doublons
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -140,21 +139,36 @@ def handle_message(data):
     # Envoi d'un accusé de réception
     emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
     
-
+active_threads = set()
+MAX_CONCURRENT_THREADS = 10
 def run_process_message(user_id, message, mode):
+    thread_id = f"{user_id}_{int(time.time())}"
+    
+    # Vérifier si le nombre maximum de threads est atteint
+    if len(active_threads) >= MAX_CONCURRENT_THREADS:
+        socketio.emit('response', {
+            'message': 'Le service est actuellement très sollicité. Veuillez réessayer plus tard.',
+            'type': 'error'
+        }, room=user_id)
+        return
+        
     def target():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         try:
-            # Exécution avec une future pour capture d'erreurs
-            future = asyncio.ensure_future(process_message(user_id, message, mode), loop=loop)
-            loop.run_until_complete(future)
-        except Exception as e:
-            logger.error(f"Erreur dans run_process_message: {str(e)}", exc_info=True)
+            active_threads.add(thread_id)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                # Exécution avec une future pour capture d'erreurs
+                future = asyncio.ensure_future(process_message(user_id, message, mode), loop=loop)
+                loop.run_until_complete(future)
+            except Exception as e:
+                logger.error(f"Erreur dans run_process_message: {str(e)}", exc_info=True)
+            finally:
+                loop.close()
         finally:
-            loop.close()
-
-    threading.Thread(target=target, daemon=True).start()
+            active_threads.discard(thread_id)
+            
+        threading.Thread(target=target, daemon=True).start()
 
 async def process_message(user_id, message, mode):
     """Traite le message de manière asynchrone avec gestion améliorée des erreurs"""

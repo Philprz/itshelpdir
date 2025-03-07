@@ -1380,25 +1380,6 @@ class QdrantJiraSearch(BaseQdrantSearch):
                     except Exception as e:
                         self.logger.error(f"Erreur optimisation requête: {str(e)}")
 
-                    # Génération de l'embedding
-                    try:
-                        async with asyncio.timeout(30):
-                            self.logger.info("Génération de l'embedding...")
-                            vector = await self.obtenir_embedding(question)
-                            if not self._validate_vector(vector):
-                                self.logger.error("Vecteur d'embedding invalide")
-                                return []
-                                
-                            resultats = self.client.search(
-                                collection_name=self.collection_name,
-                                query_vector=vector,
-                                query_filter=query_filter,
-                                limit=limit
-                            )
-                            self.logger.info(f"Embedding obtenu de taille: {len(vector)}")
-                    except Exception as e:
-                        self.logger.error(f"Erreur embedding: {str(e)}")
-                        return []
 
                     # Vérification collection
                     try:
