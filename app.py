@@ -196,6 +196,25 @@ async def process_message(user_id, message):
             # Traitement du message par le chatbot
             response = await chatbot.process_web_message(message, conversation, user_id)
 
+            # Vérification du contenu de la réponse avant envoi
+            if not response or not isinstance(response, dict):
+                logger.error(f"Réponse invalide: {response}")
+                response = {
+                    'message': 'Erreur de formatage de la réponse',
+                    'blocks': [{
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "Une erreur est survenue lors du formatage des résultats."
+                        }
+                    }],
+                    'type': 'error'
+                }
+
+            # Log détaillé pour debug
+            blocks_count = len(response.get('blocks', []))
+            logger.info(f"Préparation envoi réponse: {blocks_count} blocs, type={response.get('type', 'message')}")
+
             # Mise à jour du contexte avec les résultats de recherche
             try:
                 context = json.loads(conversation.context) if conversation.context else {}
@@ -296,6 +315,7 @@ async def process_message(user_id, message):
             'type': 'error',
             'error_id': stats["error_count"]
         }, room=user_id)
+
 
 def ensure_initialization():
     """S'assure que l'initialisation est lancée dans le contexte de l'application"""

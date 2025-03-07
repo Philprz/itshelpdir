@@ -425,19 +425,21 @@ class ChatBot:
         return final_results[:5]
 
     
-    async def format_response(self, results: List[Any], question: str = None, 
+    async def format_response(self, results: List[Any], question: str = None,
                        include_actions: bool = True) -> Dict:
         """
         Formate la réponse pour l'interface web avec blocs et actions.
-        
+
         Args:
             results: Liste des résultats de recherche
             question: Question originale (optionnelle)
             include_actions: Inclure les boutons d'action (optionnel)
-            
+
         Returns:
             Dictionnaire formaté pour l'interface web
         """
+        self.logger.info(f"Formatage de {len(results)} résultats pour l'interface")
+
         # En cas d'absence de résultats
         if not results:
             no_results_blocks = [{
@@ -447,7 +449,7 @@ class ChatBot:
                     "text": "🔍 *Aucun résultat pertinent trouvé*"
                 }
             }]
-            
+
             # Ajout de suggestions si question fournie
             if question:
                 no_results_blocks.append({
@@ -457,7 +459,7 @@ class ChatBot:
                         "text": "Essayez de reformuler votre question ou d'ajouter plus de détails."
                     }
                 })
-                
+
                 # Suggestions de recherches alternatives
                 no_results_blocks.append({
                     "type": "actions",
@@ -480,12 +482,12 @@ class ChatBot:
                         }
                     ]
                 })
-                    
+
             return {
                 "text": "Aucun résultat pertinent trouvé.",
                 "blocks": no_results_blocks
             }
-        
+
         # Construction de l'en-tête des résultats
         header_blocks = [{
             "type": "header",
@@ -495,7 +497,7 @@ class ChatBot:
                 "emoji": True
             }
         }]
-        
+
         # Ajout d'un contexte si question fournie
         if question:
             header_blocks.append({
@@ -507,13 +509,13 @@ class ChatBot:
                     }
                 ]
             })
-        
+
         # Récupération des types de sources pour le résumé
         source_types = {}
         for r in results:
             source_type = self._detect_source_type(r)
             source_types[source_type] = source_types.get(source_type, 0) + 1
-        
+
         # Ajout du résumé des sources
         source_summary = " | ".join([f"{count} {src.upper()}" for src, count in source_types.items()])
         header_blocks.append({
@@ -525,90 +527,167 @@ class ChatBot:
                 }
             ]
         })
-        
+
         # Séparateur avant les résultats
         header_blocks.append({"type": "divider"})
-        
+
         # Formatage des résultats individuels
         formatted_blocks = []
-        
+
         # Récupération des clients de recherche appropriés
         source_clients = {}
-        for r in results:
-            source_type = self._detect_source_type(r)
-            if source_type not in source_clients:
-                source_client = await search_factory.get_client(source_type)
-                if source_client:
-                    source_clients[source_type] = source_client
-        
-        # Formatage de chaque résultat avec le client approprié
+        for source_type in source_types.keys():
+            source_client = await search_factory.get_client(source_type)
+            if source_client:
+                source_clients[source_type] = source_client
+
+        # Formatage de chaque résultat manuellement avec un fallback robuste
         for r in results:
             try:
+                # Extraction du payload et du score en mode sécurisé
+                if isinstance(r, dict):
+                    payload = r.get('payload', {})
+                    score = float(r.get('score', 0.0))
+                else:
+                    payload = r.payload if isinstance(r.payload, dict) else getattr(r.payload, '__dict__', {})
+                    score = float(getattr(r, 'score', 0.0))
+
+                # Détection de la source
                 source_type = self._detect_source_type(r)
-                if source_type in source_clients:
-                    client = source_clients[source_type]
-                    block = await client.format_for_slack(r)
-                    
-                    if block:
-                        formatted_blocks.append(block)
-                        
-                        # Ajout des boutons d'action si demandé
-                        if include_actions:
-                            # Récupération des informations du résultat
-                            payload = r.payload if isinstance(r.payload, dict) else r.payload.__dict__
-                            result_id = f"{source_type}-{payload.get('id') or payload.get('key') or payload.get('ticket_id')}"
-                            
-                            action_elements = []
-                            
-                            # Bouton de détails pour les URLs
-                            url = payload.get('url') or payload.get('page_url')
-                            if url:
-                                action_elements.append({
-                                    "type": "button",
-                                    "text": {
-                                        "type": "plain_text",
-                                        "text": "🔍 Voir détails",
-                                        "emoji": True
-                                    },
-                                    "url": url,
-                                    "value": f"view:{result_id}"
-                                })
-                            
-                            # Autres boutons communs
-                            action_elements.extend([
-                                {
-                                    "type": "button",
-                                    "text": {
-                                        "type": "plain_text",
-                                        "text": "📋 Copier",
-                                        "emoji": True
-                                    },
-                                    "value": f"copy:{result_id}"
-                                },
-                                {
-                                    "type": "button",
-                                    "text": {
-                                        "type": "plain_text",
-                                        "text": "👍 Pertinent",
-                                        "emoji": True
-                                    },
-                                    "value": f"relevant:{result_id}"
-                                }
-                            ])
-                            
-                            # Ajout du bloc d'actions
-                            if action_elements:
-                                formatted_blocks.append({
-                                    "type": "actions",
-                                    "elements": action_elements
-                                })
-                        
-                        # Ajout d'un séparateur
-                        formatted_blocks.append({"type": "divider"})
-                        
+
+                # Formatage de base pour tout type de résultat
+                score_percent = round(score * 100)
+                fiabilite = "🟢" if score_percent > 80 else "🟡" if score_percent > 60 else "🔴"
+
+                # Extraction des champs communs avec fallbacks
+                title = payload.get('summary', '') or payload.get('title', '') or "Sans titre"
+                content = str(payload.get('content', '') or payload.get('text', '') or "Pas de contenu")
+                if len(content) > 500:
+                    content = content[:497] + "..."
+
+                # Construction d'un bloc de texte basique qui fonctionne pour tout type de source
+                basic_text = f"*{source_type.upper()}* - {fiabilite} {score_percent}%\n"
+
+                if source_type in ['jira', 'zendesk']:
+                    id_field = payload.get('key', '') or payload.get('ticket_id', '') or payload.get('id', '')
+                    client = payload.get('client', 'N/A')
+                    status = payload.get('resolution', '') or payload.get('status', 'En cours')
+                    assignee = payload.get('assignee', 'Non assigné')
+                    created = self._format_date(payload.get('created', ''))
+                    updated = self._format_date(payload.get('updated', ''))
+
+                    basic_text += (
+                        f"*ID:* {id_field} - *Client:* {client}\n"
+                        f"*Titre:* {title}\n"
+                        f"*Status:* {status} - *Assigné à:* {assignee}\n"
+                        f"*Créé le:* {created} - *Maj:* {updated}\n"
+                        f"*Description:* {content}\n"
+                        f"*URL:* {payload.get('url', 'N/A')}"
+                    )
+                elif source_type in ['confluence']:
+                    space_id = payload.get('space_id', 'N/A')
+                    client = payload.get('client', 'N/A')
+
+                    basic_text += (
+                        f"*Espace:* {space_id} - *Client:* {client}\n"
+                        f"*Titre:* {title}\n"
+                        f"*Contenu:* {content}\n"
+                        f"*URL:* {payload.get('page_url', 'N/A')}"
+                    )
+                elif source_type in ['netsuite', 'netsuite_dummies', 'sap']:
+                    # Format pour les sources ERP
+                    basic_text += (
+                        f"*Titre:* {title}\n"
+                        f"*Contenu:* {content}\n"
+                    )
+
+                    # Ajout de l'URL ou du chemin de fichier selon disponibilité
+                    if payload.get('url'):
+                        basic_text += f"\n*URL:* {payload.get('url')}"
+                    elif payload.get('pdf_path'):
+                        basic_text += f"\n*Document:* {payload.get('pdf_path')}"
+                else:
+                    # Format générique pour tout autre type de source
+                    basic_text += (
+                        f"*Titre:* {title}\n"
+                        f"*Contenu:* {content}"
+                    )
+
+                # Création du bloc Slack
+                block = {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": basic_text
+                    }
+                }
+
+                formatted_blocks.append(block)
+
+                # Ajout des boutons d'action si demandé
+                if include_actions:
+                    # Récupération des informations du résultat
+                    result_id = f"{source_type}-{payload.get('id') or payload.get('key') or payload.get('ticket_id', '')}"
+
+                    action_elements = []
+
+                    # Bouton de détails pour les URLs
+                    url = payload.get('url') or payload.get('page_url')
+                    if url:
+                        action_elements.append({
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "🔍 Voir détails",
+                                "emoji": True
+                            },
+                            "url": url,
+                            "value": f"view:{result_id}"
+                        })
+
+                    # Autres boutons communs
+                    action_elements.extend([
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "📋 Copier",
+                                "emoji": True
+                            },
+                            "value": f"copy:{result_id}"
+                        },
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "👍 Pertinent",
+                                "emoji": True
+                            },
+                            "value": f"relevant:{result_id}"
+                        }
+                    ])
+
+                    # Ajout du bloc d'actions
+                    if action_elements:
+                        formatted_blocks.append({
+                            "type": "actions",
+                            "elements": action_elements
+                        })
+
+                # Ajout d'un séparateur
+                formatted_blocks.append({"type": "divider"})
+
             except Exception as e:
                 self.logger.error(f"Erreur formatage résultat: {str(e)}")
-        
+                # En cas d'erreur, on ajoute un bloc d'erreur
+                formatted_blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"⚠️ *Erreur de formatage pour un résultat*"
+                    }
+                })
+
         # Si aucun résultat formaté
         if not formatted_blocks:
             return {
@@ -618,7 +697,7 @@ class ChatBot:
                     "text": {"type": "mrkdwn", "text": "Impossible d'afficher les résultats. Veuillez réessayer."}
                 }]
             }
-        
+
         # Actions complémentaires globales
         footer_blocks = []
         if include_actions and question:
@@ -645,14 +724,36 @@ class ChatBot:
                     }
                 ]
             })
-        
+
         # Assemblage final
         all_blocks = header_blocks + formatted_blocks + footer_blocks
-        
+
+        # Log final avant envoi
+        self.logger.info(f"Réponse formatée avec {len(all_blocks)} blocs")
+
         return {
             "text": f"Résultats pour: {question}" if question else "Résultats de recherche",
             "blocks": all_blocks
         }
+
+    def _format_date(self, date_value):
+        """Formate une date pour l'affichage."""
+        if not date_value:
+            return 'N/A'
+        try:
+            if isinstance(date_value, (int, float)):
+                return datetime.fromtimestamp(date_value, tz=timezone.utc).strftime("%Y-%m-%d")
+            elif isinstance(date_value, str):
+                if date_value.isdigit():
+                    return datetime.fromtimestamp(float(date_value), tz=timezone.utc).strftime("%Y-%m-%d")
+                try:
+                    return datetime.fromisoformat(date_value.replace('Z', '+00:00')).strftime("%Y-%m-%d")
+                except ValueError:
+                    return date_value[:10] if date_value else 'N/A'
+            return 'N/A'
+        except Exception:
+            return 'N/A'
+
     
     def _detect_source_type(self, result) -> str:
         """Détecte le type de source d'un résultat."""
