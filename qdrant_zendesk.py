@@ -510,11 +510,13 @@ class QdrantZendeskSearch(BaseQdrantSearch):
             try:
                 resultats = await self.recherche_intelligente(question)
                 print("\nRésultats trouvés :")
-                if not isinstance(res.payload, dict): # Extraction du payload pour chaque résultat 
-                    payload = res.payload.dict 
-                else: 
-                    payload = res.payload
+                
                 for idx, res in enumerate(resultats, 1):
+                    # Extraction sécurisée du payload pour le résultat courant 
+                    if not isinstance(res.payload, dict): 
+                        payload = res.payload.dict 
+                    else: 
+                        payload = res.payload
                     score = round(res.score * 100)  # Conversion en pourcentage
                     fiabilite = "🟢" if score > 80 else "🟡" if score > 60 else "🔴"
                     print(f"\n{idx}. Ticket #{payload['ticket_id']} - {payload['summary']}")
