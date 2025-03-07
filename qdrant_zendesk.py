@@ -83,6 +83,7 @@ class QdrantZendeskSearch(BaseQdrantSearch):
 
             return {
                 "type": "section",
+                "block_id": f"zendesk-{normalized_payload['ticket_id']}",
                 "text": {
                     "type": "mrkdwn",
                     "text": message
