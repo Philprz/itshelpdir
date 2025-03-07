@@ -219,8 +219,17 @@ class QdrantConfluenceSearch(DocumentQdrantSearch):
             }
 
         except Exception as e:
-            self.logger.error(f"Erreur format_for_slack: {str(e)}")
-            return {}
+            self.logger.error(f"Erreur formatage: {str(e)}")
+            # Utiliser le nom de la classe pour déterminer le type de source
+            source_type = self.__class__.__name__.replace("SearchClient", "").lower()
+            return {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{source_type.upper()}* - ❌ Erreur de formatage"
+                }
+            }
+
     
     async def recherche_intelligente(self, question: str, client_name: Optional[Dict] = None, 
                                    date_debut: Optional[datetime] = None, 

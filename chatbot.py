@@ -1,4 +1,4 @@
-# À renommer en chatbot.py (remplacer le fichier existant)
+# chatbot.py 
 
 import os
 import re
@@ -559,10 +559,14 @@ class ChatBot:
                 if source_type in source_clients:
                     source_client = source_clients[source_type]
                     formatted_block = await source_client.format_for_slack(r)
-                    if formatted_block:
+                    if formatted_block and isinstance(formatted_block, dict) and formatted_block.get("type"):
                         formatted_blocks.append(formatted_block)
                         formatted_blocks.append({"type": "divider"})
                         continue
+                    else:
+                        # Déterminer le type de source à partir du résultat lui-même
+                        current_source_type = self._detect_source_type(r)
+                        self.logger.warning(f"Bloc formaté invalide pour {current_source_type}, utilisation du formatage par défaut")
                         
                 # Sinon, fallback au formatage de base (code original conservé)
                 score_percent = round(score * 100)
@@ -784,7 +788,9 @@ class ChatBot:
                 return 'netsuite'
             if 'title' in p and 'text' in p:
                 return 'sap'
-                
+                # Détection basée sur des attributs additionnels
+            if any(key in str(p.keys()).lower() for key in ['jira', 'issue']):
+                return 'jira'
             return 'unknown'
             
         except Exception as e:

@@ -296,18 +296,25 @@ async def process_message(user_id, message):
                 
                 # Sérialisation sécurisée
                 try:
-                    response_size = len(json.dumps(response))
-                    logger.info(f"Réponse envoyée à {user_id} en {elapsed_time:.2f}s (taille: {response_size/1024:.1f} KB)")
+                    json_response = json.dumps({
+                        'message': response.get('text', 'Pas de réponse'),
+                        'blocks': response.get('blocks', []),
+                        'type': 'message',
+                        'response_time': round(elapsed_time, 2)
+                    })
+                    response_size = len(json_response)
+                    logger.info(f"Réponse sérialisée: {response_size/1024:.1f} KB")
                 except (TypeError, ValueError) as e:
-                    logger.error(f"Erreur sérialisation JSON: {str(e)}")
-                    response = {'text': 'Erreur de formatage', 'blocks': []}
-                
-                socketio.emit('response', {
-                    'message': response.get('text', 'Pas de réponse'),
-                    'blocks': response.get('blocks', []),
-                    'type': 'message',
-                    'response_time': round(elapsed_time, 2)
-                }, room=user_id)
+                    logger.error(f"Erreur sérialisation: {str(e)}")
+                    # Fallback à une réponse simple
+                    socketio.emit('response', {
+                        'message': 'Erreur de formatage',
+                        'blocks': [{
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": "Erreur lors du formatage des résultats"}
+                        }],
+                        'type': 'error'
+                    }, room=user_id)
             except Exception as e:
                 logger.error(f"Erreur envoi réponse: {str(e)}")
                 socketio.emit('response', {'message': f"Erreur: {str(e)}", 'type': 'error'}, room=user_id)

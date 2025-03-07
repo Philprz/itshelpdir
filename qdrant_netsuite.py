@@ -274,8 +274,16 @@ class QdrantNetsuiteSearch(TranslationMixin, BaseQdrantSearch):
                 "text": {"type": "mrkdwn", "text": message}
             }
         except Exception as e:
-            self.logger.error(f"Erreur format_for_slack: {str(e)}")
-            return self._format_fallback(result)
+            self.logger.error(f"Erreur formatage: {str(e)}")
+            # Utiliser le nom de la classe pour déterminer le type de source
+            source_type = self.__class__.__name__.replace("SearchClient", "").lower()
+            return {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{source_type.upper()}* - ❌ Erreur de formatage"
+                }
+            }
 
 
     # ---------------------

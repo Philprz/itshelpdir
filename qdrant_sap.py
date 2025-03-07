@@ -217,18 +217,16 @@ class QdrantSapSearch(TranslationMixin, SimpleQdrantSearch):
             }
 
         except Exception as e:
-            self.logger.error(f"Erreur format_for_slack: {str(e)}")
-            try:
-                minimal_title = payload.get('title', 'Sans titre')[:50] if payload else 'Sans titre'
-                return {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"🔸 *{source_prefix}* - {fiabilite} {score}%\n{minimal_title}..."
-                    }
+            self.logger.error(f"Erreur formatage: {str(e)}")
+            # Utiliser le nom de la classe pour déterminer le type de source
+            source_type = self.__class__.__name__.replace("SearchClient", "").lower()
+            return {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{source_type.upper()}* - ❌ Erreur de formatage"
                 }
-            except:
-                return None
+            }
     def valider_resultat(self, res) -> bool:
         if not isinstance(res.payload, dict):
             return False
