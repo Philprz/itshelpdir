@@ -280,34 +280,28 @@ def clean_text(text):
 
 async def init_db():
     try:
-        # Utilisation d'un timeout plus court pour éviter de bloquer
-        async with asyncio.timeout(5):  # Réduire à 5 secondes au lieu de 10
-            # Vérifier la connexion de manière non-bloquante
-            try:
-                # Vérification simplifiée avec timeout court
-                connection = await asyncio.wait_for(engine.connect(), timeout=2.0)
-                await connection.close()
-                logger.info("Database connection successful.")
-            except Exception as conn_err:
-                logger.warning(f"Database connection check skipped: {str(conn_err)}")
-                os.makedirs('data', exist_ok=True)
-
-            # Création des tables avec timeout court
-            async with engine.begin() as conn:
-                try:
-                    # Utiliser .create_all() avec l'option checkfirst explicitement définie
-                    await conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True))
-                    logger.info("Database tables created or verified.")
-                    
-                except sqlite3.OperationalError as e:
-                    if "already exists" in str(e):
-                        logger.info("Table already exists, skipping creation.")
-                    else:
-                        raise
-
-    except (asyncio.TimeoutError, Exception) as e:
-        logger.error(f"Error during database initialization: {str(e)}")
-        return
+        # Connexion rapide pour vérifier l'accès à la BD
+        try:
+            connection = await engine.connect()
+            await connection.close()
+            logger.info("Database connection successful.")
+        except Exception as e:
+            logger.warning(f"Database connection check: {str(e)}")
+            os.makedirs('data', exist_ok=True)
+        # Création des tables avec gestion explicite des erreurs
+        async with engine.begin() as conn:
+            # Vérification explicite si la table existe déjà
+            exists = await conn.run_sync(lambda conn: inspect(conn).has_table('conversations'))
+            
+            if not exists:
+                # Créer les tables uniquement si elles n'existent pas
+                await conn.run_sync(Base.metadata.create_all)
+                logger.info("Database tables created successfully.")
+            else:
+                logger.info("Tables already exist, skipping creation.")
+                
+    except Exception as e:
+        logger.error(f"Error during database initialization: {str(e)}")            
 
 
 def create_sqlite_functions(conn):
