@@ -280,6 +280,16 @@ class ChatBot:
                            date_debut: Optional[Any] = None, date_fin: Optional[Any] = None) -> List[Any]:
         """
         Coordonne la recherche parallèle sur plusieurs collections.
+
+        Args:
+            collections: Liste des collections à interroger.
+            question: Question ou texte à rechercher.
+            client_info: Informations sur le client (optionnel).
+            date_debut: Date de début pour filtrage (optionnel).
+            date_fin: Date de fin pour filtrage (optionnel).
+
+        Returns:
+            Liste combinée des résultats pertinents.
         """
         self.logger.info(f"Début recherche coordonnée sur {len(collections)} collections")
         start_time = time.monotonic()
@@ -292,7 +302,16 @@ class ChatBot:
             self.logger.info(f"Période: {date_debut} → {date_fin}")
 
         # Récupération des clients de recherche
-        clients = await search_factory.get_clients(collections)
+        clients = {}
+        for collection in collections:
+            client = await search_factory.get_client(collection)
+            if client:
+                clients[collection] = client
+
+        if not clients:
+            self.logger.error("Aucun client de recherche disponible")
+            return []
+
         results = []
 
         # Détection de la stratégie de recherche et priorisation des sources
@@ -322,7 +341,7 @@ class ChatBot:
 
         # Exécution en fonction de la priorisation
         executed_sources = set()
-        
+
         # Exécuter les sources prioritaires en premier
         for source_type in priority_sources:
             if source_type in clients:
@@ -356,9 +375,14 @@ class ChatBot:
                             r.payload['source_type'] = source_type
                         else:
                             # Cas où payload est un objet Python
-                            r.payload.__dict__['source_type'] = source_type
+                            try:
+                                r.payload.__dict__['source_type'] = source_type
+                            except (AttributeError, TypeError):
+                                # Si payload n'est pas un objet avec __dict__, créer un nouveau payload
+                                old_payload = r.payload
+                                r.payload = {'source_type': source_type, 'original_payload': old_payload}
 
-                combined_results.extend(res)
+                    combined_results.extend(res)
 
         # Tri des résultats par score et déduplication
         combined_results.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
@@ -369,8 +393,16 @@ class ChatBot:
             if not hasattr(res, 'payload'):
                 continue
 
-            payload = res.payload if isinstance(res.payload, dict) else res.payload.__dict__
-            content = str(payload.get('content', '') or payload.get('text', ''))
+            # Extraction sécurisée du contenu
+            try:
+                if isinstance(res.payload, dict):
+                    payload = res.payload
+                else:
+                    payload = res.payload.__dict__ if hasattr(res.payload, '__dict__') else {}
+
+                content = str(payload.get('content', '') or payload.get('text', ''))
+            except Exception:
+                content = "content_extraction_failed"
 
             # Utilisation d'un hash du contenu pour la déduplication
             content_hash = hashlib.md5(content[:500].encode('utf-8', errors='ignore')).hexdigest()
@@ -386,11 +418,12 @@ class ChatBot:
         self.logger.info(f"Recherche terminée en {total_time:.2f}s - Résultats par source: {results_by_source}")
         self.logger.info(f"Total dédupliqué: {len(final_results)} résultats")
 
-        # Stocker les résultats pour référence future (ajout pour résoudre l'erreur)
-        self._last_search_results = final_results
+        # Sauvegarde des résultats pour les actions ultérieures
+        self._last_search_results = final_results[:5]
 
         # Limitation à un nombre raisonnable de résultats
         return final_results[:5]
+
     
     async def format_response(self, results: List[Any], question: str = None, 
                        include_actions: bool = True) -> Dict:

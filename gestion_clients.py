@@ -206,7 +206,7 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
                 client = exact_matches[0]
                 logger.info(f"Un seul match exact: {client.client}")
                 return client.client, 100.0, {"source": client.client}
-            elif len(exact_matches) > 1:
+            if len(exact_matches) > 1:
                 logger.warning(f"Matches multiples trouvés: {[c.client for c in exact_matches]}")
                 # Sélectionner le premier match en cas de doublons
                 client = exact_matches[0]
@@ -241,7 +241,6 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
         except Exception as e:
             logger.error(f"Erreur dans extract_client_name: {str(e)}", exc_info=True)
             return None, 0.0, {}
-
 
 
 async def validate_message(message: str) -> bool:

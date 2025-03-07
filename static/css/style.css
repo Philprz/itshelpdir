@@ -193,3 +193,10 @@ pre {
     color: white;
     border-color: #1a2a3a;
 }
+
+/* Ajoutez cette règle pour le titre de la page */
+.page-title {
+    color: #284253; /* Utilisez la même couleur bleu foncé que les autres éléments */
+    font-size: 24px; /* Ajustez la taille de la police selon vos besoins */
+    font-weight: bold; /* Ajustez le poids de la police selon vos besoins */
+}

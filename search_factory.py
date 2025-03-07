@@ -1,4 +1,4 @@
-# À ajouter dans un fichier search_factory.py
+# search_factory.py
 
 import os
 import asyncio
@@ -20,7 +20,7 @@ class SearchClientFactory:
     Factory pour la création et la gestion des clients de recherche.
     Centralise la gestion des dépendances et des instances.
     """
-    
+
     def __init__(self):
         self.clients = {}
         self.qdrant_client = None
@@ -29,7 +29,7 @@ class SearchClientFactory:
         self.translation_service = None
         self.initialized = False
         self.logger = logging.getLogger('ITS_HELP.search.factory')
-        
+
         # Collections par défaut
         self.default_collections = {
             'jira': os.getenv('QDRANT_COLLECTION_JIRA', 'JIRA'),
@@ -39,108 +39,12 @@ class SearchClientFactory:
             'netsuite_dummies': os.getenv('QDRANT_COLLECTION_NETSUITE_DUMMIES', 'NETSUITE_DUMMIES'),
             'sap': os.getenv('QDRANT_COLLECTION_SAP', 'SAP')
         }
-    def _get_client_types(self):
-        """Import dynamique des types de clients pour éviter les imports circulaires"""
-        from search_base import AbstractSearchClient
-        
-        # Création dynamique des classes de recherche pour éviter les imports circulaires
-        class DummySearchClient(AbstractSearchClient):
-            async def format_for_slack(self, result): 
-                return {}
-            def valider_resultat(self, result):
-                return False
-                
-        # Dictionnaire par défaut avec des clients fictifs
-        client_types = {
-            'jira': DummySearchClient,
-            'zendesk': DummySearchClient,
-            'confluence': DummySearchClient,
-            'netsuite': DummySearchClient,
-            'netsuite_dummies': DummySearchClient,
-            'sap': DummySearchClient
-        }
-        
-        # Tentative d'import des vrais clients
-        try:
-            from search_clients import (
-                JiraSearchClient, 
-                ZendeskSearchClient, 
-                ConfluenceSearchClient, 
-                NetsuiteSearchClient,
-                NetsuiteDummiesSearchClient,
-                SapSearchClient
-            )
-            
-            # Remplacement par les vrais clients
-            client_types = {
-                'jira': JiraSearchClient,
-                'zendesk': ZendeskSearchClient,
-                'confluence': ConfluenceSearchClient,
-                'netsuite': NetsuiteSearchClient,
-                'netsuite_dummies': NetsuiteDummiesSearchClient,
-                'sap': SapSearchClient
-            }
-            self.logger.info("Classes de clients de recherche importées avec succès")
-        except Exception as e:
-            self.logger.error(f"Erreur import classes clients: {str(e)}")
-            
-        return client_types
-            
-    async def get_clients(self, source_types: list) -> Dict[str, AbstractSearchClient]:
-        """Récupère ou crée un client de recherche pour le type demandé"""
-        # Vérification de l'initialisation
-        if not self.initialized:
-            await self.initialize()
-            clients = {}
-            for source_type in source_types:
-                client = await self.get_client(source_type)
-                if client:
-                    clients[source_type] = client
-                    
-            return clients
-        # Normalisation du type
-        source_type = source_type.lower()
-        
-        # Vérification du cache
-        if source_type in self.clients:
-            return self.clients[source_type]
-            
-        # Obtention dynamique des types de clients
-        client_types = self._get_client_types()
-            
-        # Vérification du type supporté
-        if source_type not in client_types:
-            self.logger.warning(f"Type de source non pris en charge: {source_type}")
-            return None
-            
-        # Récupération de la collection
-        collection_name = self.default_collections.get(source_type)
-        if not collection_name:
-            self.logger.warning(f"Pas de collection configurée pour {source_type}")
-            return None
-            
-        # Création du client
-        try:
-            client_class = client_types[source_type]
-            client = client_class(
-                collection_name=collection_name,
-                qdrant_client=self.qdrant_client,
-                embedding_service=self.embedding_service,
-                translation_service=self.translation_service
-            )
-            
-            # Mise en cache
-            self.clients[source_type] = client
-            return client
-            
-        except Exception as e:
-            self.logger.error(f"Erreur création client {source_type}: {str(e)}")
-            return None
+
     async def initialize(self):
         """Initialisation des services et clients de base."""
         if self.initialized:
             return
-            
+
         try:
             # Création des clients de base
             try:
@@ -152,9 +56,9 @@ class SearchClientFactory:
             except Exception as e:
                 self.logger.error(f"Erreur connexion Qdrant: {str(e)}")
                 # Créer un client minimal même en cas d'échec pour éviter les blocages
-                self.qdrant_client = object() 
+                self.qdrant_client = object()
                 self.qdrant_client.get_collections = lambda: None
-            
+
             try:
                 self.openai_client = AsyncOpenAI(
                     api_key=os.getenv('OPENAI_API_KEY'),
@@ -164,7 +68,7 @@ class SearchClientFactory:
                 self.logger.error(f"Erreur initialisation OpenAI client: {str(e)}")
                 # Créer un client minimal en cas d'échec
                 self.openai_client = AsyncOpenAI(api_key="dummy-key-for-initialization")
-            
+
             # Création des services avec gestion d'erreurs
             try:
                 self.embedding_service = EmbeddingService(
@@ -176,7 +80,7 @@ class SearchClientFactory:
                 # Créer un service minimal
                 self.embedding_service = object()
                 self.embedding_service.get_embedding = lambda text, **kwargs: []
-            
+
             try:
                 self.translation_service = TranslationService(
                     openai_client=None,  # Client synchrone non nécessaire
@@ -188,11 +92,11 @@ class SearchClientFactory:
                 # Créer un service minimal
                 self.translation_service = object()
                 self.translation_service.translate = lambda text, **kwargs: text
-            
+
             # Marquer comme initialisé même en cas d'erreurs partielles
             self.initialized = True
             self.logger.info("SearchClientFactory initialisé avec mode dégradé si nécessaire")
-            
+
         except Exception as e:
             self.logger.error(f"Erreur initialisation SearchClientFactory: {str(e)}")
             # Rendre les attributs disponibles même en cas d'erreur
@@ -206,67 +110,95 @@ class SearchClientFactory:
                 self.translation_service = None
             # Marquer comme initialisé pour éviter les blocages
             self.initialized = True
-        
-    async def search_all(self, question: str, client_name=None, date_debut=None, date_fin=None, limit_per_source=3):
+
+    async def get_client(self, source_type: str):
         """
-        Effectue une recherche sur toutes les sources disponibles.
-        
+        Récupère ou crée un client de recherche pour le type demandé.
+
         Args:
-            question: Question à rechercher
-            client_name: Information sur le client (optionnel)
-            date_debut: Date de début pour filtrage (optionnel)
-            date_fin: Date de fin pour filtrage (optionnel)
-            limit_per_source: Nombre maximum de résultats par source
-            
+            source_type: Type de source de données ('jira', 'zendesk', etc.)
+
         Returns:
-            Dictionnaire des résultats par source
+            Client de recherche correspondant ou None si non pris en charge
         """
-        # Initialisation si nécessaire
+        # Vérification de l'initialisation
         if not self.initialized:
             await self.initialize()
-            
-        # Récupération de tous les clients
-        clients = await self.get_clients(self.default_collections.keys())
-        
-        # Exécution des recherches en parallèle
-        async def search_source(source_type, client):
-            try:
-                results = await client.recherche_intelligente(
-                    question=question,
-                    client_name=client_name,
-                    date_debut=date_debut,
-                    date_fin=date_fin
-                )
-                return source_type, results[:limit_per_source]
-            except Exception as e:
-                self.logger.error(f"Erreur recherche {source_type}: {str(e)}")
-                return source_type, []
-                
-        tasks = [search_source(source_type, client) for source_type, client in clients.items()]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Traitement des résultats
-        all_results = {}
-        for result in results:
-            if isinstance(result, Exception):
-                self.logger.error(f"Erreur recherche: {str(result)}")
-                continue
-                
-            source_type, source_results = result
-            all_results[source_type] = source_results
-            
-        return all_results
-    
-    def get_legacy_client(self, source_type: str):
-        """
-        Fonction de compatibilité pour obtenir un client legacy.
-        À utiliser pendant la transition vers la nouvelle architecture.
-        """
-        if source_type.lower() == 'jira':
-            from qdrant_jira import QdrantJiraSearch
-            return QdrantJiraSearch(collection_name=self.default_collections['jira'])
-        elif source_type.lower() == 'zendesk':
-            from qdrant_zendesk import QdrantZendeskSearch
-            return QdrantZendeskSearch(collection_name=self.default_collections['zendesk'])
+
+        # Normalisation du type
+        source_type = source_type.lower()
+
+        # Vérification du cache
+        if source_type in self.clients:
+            return self.clients[source_type]
+
+        # Obtention dynamique des types de clients
+        client_types = self._get_client_types()
+
+        # Vérification du type supporté
+        if source_type not in client_types:
+            self.logger.warning(f"Type de source non pris en charge: {source_type}")
+            return None
+
+        # Récupération de la collection
+        collection_name = self.default_collections.get(source_type)
+        if not collection_name:
+            self.logger.warning(f"Pas de collection configurée pour {source_type}")
+            return None
+
+        # Création du client
+        try:
+            client_class = client_types[source_type]
+            client = client_class(
+                collection_name=collection_name,
+                qdrant_client=self.qdrant_client,
+                embedding_service=self.embedding_service,
+                translation_service=self.translation_service
+            )
+
+            # Mise en cache
+            self.clients[source_type] = client
+            return client
+
+        except Exception as e:
+            self.logger.error(f"Erreur création client {source_type}: {str(e)}")
+            return None
+
+    def _get_client_types(self):
+        """Import dynamique des types de clients pour éviter les imports circulaires"""
+        try:
+            from search_clients import (
+                JiraSearchClient,
+                ZendeskSearchClient,
+                ConfluenceSearchClient,
+                NetsuiteSearchClient,
+                NetsuiteDummiesSearchClient,
+                SapSearchClient
+            )
+
+            # Création des mappings vers les classes
+            return {
+                'jira': JiraSearchClient,
+                'zendesk': ZendeskSearchClient,
+                'confluence': ConfluenceSearchClient,
+                'netsuite': NetsuiteSearchClient,
+                'netsuite_dummies': NetsuiteDummiesSearchClient,
+                'sap': SapSearchClient
+            }
+        except Exception as e:
+            self.logger.error(f"Erreur import classes clients: {str(e)}")
+            # Créer une classe de repli
+            from search_base import AbstractSearchClient
+
+            class DummySearchClient(AbstractSearchClient):
+                async def format_for_slack(self, result):
+                    return {}
+
+                def valider_resultat(self, result):
+                    return False
+
+            dummy_types = {source: DummySearchClient for source in self.default_collections.keys()}
+            return dummy_types
+
 # Instance globale
 search_factory = SearchClientFactory()
