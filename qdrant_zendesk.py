@@ -510,9 +510,9 @@ class QdrantZendeskSearch(BaseQdrantSearch):
             try:
                 resultats = await self.recherche_intelligente(question)
                 print("\nRésultats trouvés :")
-                if not isinstance(res.payload, dict):  # ou result.payload selon le cas
-                    payload = res.payload.__dict__
-                else:
+                if not isinstance(res.payload, dict): # Extraction du payload pour chaque résultat 
+                    payload = res.payload.dict 
+                else: 
                     payload = res.payload
                 for idx, res in enumerate(resultats, 1):
                     score = round(res.score * 100)  # Conversion en pourcentage
