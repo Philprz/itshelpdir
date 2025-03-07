@@ -280,28 +280,18 @@ def clean_text(text):
 
 async def init_db():
     try:
-        # Connexion rapide pour vérifier l'accès à la BD
-        try:
-            connection = await engine.connect()
-            await connection.close()
-            logger.info("Database connection successful.")
-        except Exception as e:
-            logger.warning(f"Database connection check: {str(e)}")
-            os.makedirs('data', exist_ok=True)
-        # Création des tables avec gestion explicite des erreurs
+        # Ouverture d'une connexion transactionnelle
         async with engine.begin() as conn:
-            # Vérification explicite si la table existe déjà
-            exists = await conn.run_sync(lambda conn: inspect(conn).has_table('conversations'))
-            
-            if not exists:
-                # Créer les tables uniquement si elles n'existent pas
-                await conn.run_sync(Base.metadata.create_all)
-                logger.info("Database tables created successfully.")
-            else:
-                logger.info("Tables already exist, skipping creation.")
-                
+            # create_all utilise checkfirst=True par défaut et ne recrée pas les tables existantes
+            await conn.run_sync(Base.metadata.create_all)
+            logger.info("Les tables de la base de données sont vérifiées/créées avec succès.")
     except Exception as e:
-        logger.error(f"Error during database initialization: {str(e)}")            
+        # Si une erreur "already exists" survient à cause d'une concurrence, on l'ignore
+        if "already exists" in str(e):
+            logger.info("Les tables existent déjà, création ignorée.")
+        else:
+            logger.error(f"Erreur lors de l'initialisation de la base de données : {str(e)}")
+     
 
 
 def create_sqlite_functions(conn):
