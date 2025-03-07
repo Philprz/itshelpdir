@@ -915,7 +915,7 @@ class ChatBot:
             self.logger.error(f"Erreur génération résumé: {str(e)}")
             return "Erreur lors de la génération du résumé."
     
-    async def process_web_message(self, text: str, conversation: Any, user_id: str) -> Dict:
+    async def process_web_message(self, text: str, conversation: Any, user_id: str, mode: str = "detail") -> Dict:
         start_time = time.monotonic()
         try:
             # Si c'est une commande spéciale, traitement approprié
@@ -1011,46 +1011,29 @@ class ChatBot:
                             "text": {"type": "mrkdwn", "text": "Désolé, je n'ai trouvé aucun résultat pertinent pour votre question."}
                         }]
                     }
+                # Choix du format selon le mode transmis
+                if mode == "detail":
+                    # Retourner directement les résultats détaillés
+                    detailed_response = await self.format_response(resultats, text)
+                    return detailed_response
+                else:
+                    # Pour le mode guide, générer un résumé avec boutons d'action
+                    summary = await self.generate_summary(resultats, text)
+                    action_buttons = { 
+                        "type": "actions",
+                        "elements": [
+                            {"type": "button", "text": {"type": "plain_text", "text": "🔍 Détails", "emoji": True}, "value": f"details:{text}"},
+                            {"type": "button", "text": {"type": "plain_text", "text": "📋 Guide", "emoji": True}, "value": f"guide:{text}"}
+                        ]
+                    }
+                    return {
+                        "text": summary,
+                        "blocks": [
+                            {"type": "section", "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}},
+                            action_buttons
+                        ]
+                    }
 
-                # Génération d'un résumé concis
-                summary = await self.generate_summary(resultats, text)
-
-                # Préparation des boutons pour changer de mode
-                action_buttons = {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "🔍 Détails",
-                                "emoji": True
-                            },
-                            "value": f"details:{text}"
-                        },
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "📋 Guide",
-                                "emoji": True
-                            },
-                            "value": f"guide:{text}"
-                        }
-                    ]
-                }
-
-                # Création de la réponse formatée avec le résumé et les boutons
-                return {
-                    "text": summary,
-                    "blocks": [
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}
-                        },
-                        action_buttons
-                    ]
-                }
 
         except Exception as e:
             self.logger.error(f"Erreur process_web_message: {str(e)}")

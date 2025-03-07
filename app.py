@@ -113,6 +113,11 @@ def handle_disconnect():
 def handle_message(data):
     # Traitement synchrone
     user_id = data.get('user_id', request.sid)
+    message = data.get('message', '')
+    # EXTRAIRE le mode (par défaut "detail")
+    mode = data.get('mode', 'detail')
+    logger.info("handle_message déclenché, user_id: %s, message: %s, mode: %s", user_id, message, mode)
+
     if 'action' in data:
         action = data.get('action', {})
         action_type = action.get('type', '')
@@ -128,6 +133,8 @@ def handle_message(data):
             'type': 'status',
             'initializing': True
         })
+        # Passer le mode au traitement
+        socketio.start_background_task(run_process_message, user_id, message, mode)
         return
         
     # Envoi d'un accusé de réception
@@ -137,25 +144,22 @@ def handle_message(data):
     socketio.start_background_task(run_process_message, user_id, message)
 
 
-def run_process_message(user_id, message):
+def run_process_message(user_id, message, mode):
     def target():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             # Exécution avec une future pour capture d'erreurs
-            future = asyncio.ensure_future(process_message(user_id, message), loop=loop)
+            future = asyncio.ensure_future(process_message(user_id, message, mode), loop=loop)
             loop.run_until_complete(future)
         except Exception as e:
             logger.error(f"Erreur dans run_process_message: {str(e)}", exc_info=True)
         finally:
             loop.close()
 
-    import threading
-    t = threading.Thread(target=target)
-    t.daemon = True
-    t.start()
+    threading.Thread(target=target, daemon=True).start()
 
-async def process_message(user_id, message):
+async def process_message(user_id, message, mode):
     """Traite le message de manière asynchrone avec gestion améliorée des erreurs"""
     start_time = time.monotonic()
     global stats
@@ -194,7 +198,7 @@ async def process_message(user_id, message):
                 conversation = result.fetchone()
 
             # Traitement du message par le chatbot
-            response = await chatbot.process_web_message(message, conversation, user_id)
+            response = await chatbot.process_web_message(message, conversation, user_id, mode)
 
             # Vérification du contenu de la réponse avant envoi
             if not response or not isinstance(response, dict):
