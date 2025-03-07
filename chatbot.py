@@ -541,10 +541,10 @@ class ChatBot:
             if source_client:
                 source_clients[source_type] = source_client
 
-        # Formatage de chaque résultat manuellement avec un fallback robuste
+        # Formatage de chaque résultat en utilisant les clients de recherche
         for r in results:
             try:
-                # Extraction du payload et du score en mode sécurisé
+                # Extraction du payload et du score (conservé du code original)
                 if isinstance(r, dict):
                     payload = r.get('payload', {})
                     score = float(r.get('score', 0.0))
@@ -554,8 +554,17 @@ class ChatBot:
 
                 # Détection de la source
                 source_type = self._detect_source_type(r)
-
-                # Formatage de base pour tout type de résultat
+                
+                # Formatage via client spécialisé si disponible
+                if source_type in source_clients:
+                    source_client = source_clients[source_type]
+                    formatted_block = await source_client.format_for_slack(r)
+                    if formatted_block:
+                        formatted_blocks.append(formatted_block)
+                        formatted_blocks.append({"type": "divider"})
+                        continue
+                        
+                # Sinon, fallback au formatage de base (code original conservé)
                 score_percent = round(score * 100)
                 fiabilite = "🟢" if score_percent > 80 else "🟡" if score_percent > 60 else "🔴"
 
@@ -756,7 +765,6 @@ class ChatBot:
 
     
     def _detect_source_type(self, result) -> str:
-        """Détecte le type de source d'un résultat."""
         try:
             if isinstance(result, dict):
                 p = result
@@ -779,7 +787,8 @@ class ChatBot:
                 
             return 'unknown'
             
-        except:
+        except Exception as e:
+            self.logger.error(f"Erreur détection type source: {str(e)}")
             return 'unknown'
     
     async def generate_guide(self, results: List[Any], question: str) -> str:
