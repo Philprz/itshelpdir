@@ -14,12 +14,12 @@ body {
 
 .input-group .btn-primary {
     background-color: #284253;
-    border-color: #1a2a3a;
+    border-color: #284253;
 }
 
 .input-group .btn-primary:hover {
-    background-color: #1a2a3a;
-    border-color: #0d1520;
+    background-color: #284253;
+    border-color: #284253;
 }
 
 /* Autres éléments qui utilisaient l'ancien bleu */
@@ -59,8 +59,9 @@ body {
     max-width: 80%;
 }
 
+/* Les messages utilisateur restent en #284253 */
 .user-message .message-content {
-    background-color: #284253;  /* Nouvelle couleur bleu foncé */
+    background-color: #284253; 
     color: white;
     border-bottom-right-radius: 5px;
 }
@@ -85,10 +86,9 @@ body {
     margin-bottom: 0;
 }
 
-.typing-indicator {
-    display: flex;
-    align-items: center;
-    margin-bottom: 15px;
+/* L'indicateur de saisie reste en #284253 */
+.typing-indicator span {
+    background-color: #284253;
 }
 
 .typing-indicator span {
@@ -191,12 +191,12 @@ pre {
 .action-button:hover {
     background-color: #284253;
     color: white;
-    border-color: #1a2a3a;
+    border-color: #284253; /* Unifié */
 }
 
-/* Ajoutez cette règle pour le titre de la page */
+/* Le titre utilise aussi le même bleu foncé */
 .page-title {
-    color: #284253; /* Utilisez la même couleur bleu foncé que les autres éléments */
-    font-size: 24px; /* Ajustez la taille de la police selon vos besoins */
-    font-weight: bold; /* Ajustez le poids de la police selon vos besoins */
+    color: #284253; 
+    font-size: 24px;
+    font-weight: bold;
 }
