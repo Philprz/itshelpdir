@@ -249,6 +249,16 @@ def process():
 # Chargement des variables d'environnement
 load_dotenv()
 
+# Définition de la fonction ensure_initialization
+def ensure_initialization():
+    """S'assure que l'initialisation est lancée dans le contexte de l'application"""
+    if not app_context.initialization_attempt:
+        logger.info("Démarrage de l'initialisation du chatbot")
+        socketio.start_background_task(initialize)
+
+# Démarrer l'initialisation au lancement de l'application
+ensure_initialization()
+
 # Statistiques et monitoring
 stats = {
     "requests_total": 0,
@@ -312,13 +322,15 @@ def handle_message(data):
     
     # Utilisation du chatbot depuis le contexte d'application
     if not app_context.chatbot:
-        logger.error("Le chatbot n'est pas initialisé!")
+        logger.info("Le chatbot n'est pas initialisé! Démarrage de l'initialisation...")
+        ensure_initialization()  # Déclencher l'initialisation si pas encore fait
         emit('response', {
             'message': 'Le service est en cours d\'initialisation, veuillez patienter quelques instants...',
             'type': 'status',
             'initializing': True
         })
-        # Passer le mode au traitement
+        # Passer le message à la file d'attente pour traitement ultérieur
+        socketio.start_background_task(run_process_message, user_id, message, mode)
         return
         
     # Utiliser le pool de workers pour soumettre le traitement asynchrone
@@ -452,12 +464,6 @@ async def wait_for_initialization(user_id, max_wait=30):
         await asyncio.sleep(2)
     
     return app_context.initialized
-
-def ensure_initialization():
-    """S'assure que l'initialisation est lancée dans le contexte de l'application"""
-    if not app_context.initialization_attempt:
-        logger.info("Démarrage de l'initialisation du chatbot")
-        socketio.start_background_task(initialize)
 
 async def initialize():
     """Initialisation progressive des composants au démarrage"""
