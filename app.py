@@ -16,7 +16,7 @@ import sqlalchemy.orm.exc as sa_exc
 from openai import OpenAIError
 
 from configuration import logger, global_cache
-from base_de_donnees import SessionLocal, init_db
+from base_de_donnees import init_db
 from chatbot import ChatBot
 from search_factory import search_factory
 
@@ -172,10 +172,20 @@ class ApplicationContext:
         """Initialise le chatbot"""
         self.logger.info("Initialisation du chatbot")
         try:
+            # Récupération des clés nécessaires depuis les variables d'environnement
+            openai_key = os.getenv('OPENAI_API_KEY')
+            qdrant_url = os.getenv('QDRANT_URL')
+            qdrant_api_key = os.getenv('QDRANT_API_KEY')
+            
+            if not openai_key or not qdrant_url:
+                self.logger.error("Clés API manquantes: OPENAI_API_KEY ou QDRANT_URL non définies")
+                self.errors.append("Clés API requises non définies dans les variables d'environnement")
+                return False
+                
             self.chatbot = ChatBot(
-                db_session_factory=SessionLocal,
-                search_factory=search_factory,
-                cache=global_cache
+                openai_key=openai_key,
+                qdrant_url=qdrant_url,
+                qdrant_api_key=qdrant_api_key
             )
             return True
         except Exception as e:
@@ -288,6 +298,7 @@ def handle_message(data):
     # EXTRAIRE le mode (par défaut "detail")
     mode = data.get('mode', 'detail')
     logger.info("handle_message déclenché, user_id: %s, message: %s, mode: %s", user_id, message, mode)
+    print("SOCKET.IO MESSAGE REÇU:", data)  # Ajout d'un log plus visible
 
     if 'action' in data:
         action = data.get('action', {})
@@ -301,6 +312,7 @@ def handle_message(data):
     
     # Utilisation du chatbot depuis le contexte d'application
     if not app_context.chatbot:
+        logger.error("Le chatbot n'est pas initialisé!")
         emit('response', {
             'message': 'Le service est en cours d\'initialisation, veuillez patienter quelques instants...',
             'type': 'status',
@@ -310,15 +322,20 @@ def handle_message(data):
         return
         
     # Utiliser le pool de workers pour soumettre le traitement asynchrone
-    asyncio.run_coroutine_threadsafe(
-        worker_pool.submit(
-            process_message(user_id, message, mode),
-            priority=1,  # Priorité standard
-            user_id=user_id,
-            timeout=120  # Timeout de 2 minutes
-        ),
-        asyncio.get_event_loop()
-    )
+    try:
+        asyncio.run_coroutine_threadsafe(
+            worker_pool.submit(
+                process_message(user_id, message, mode),
+                priority=1,  # Priorité standard
+                user_id=user_id,
+                timeout=120  # Timeout de 2 minutes
+            ),
+            asyncio.get_event_loop()
+        )
+    except Exception as e:
+        logger.error(f"Erreur lors de la soumission du message au worker pool: {str(e)}")
+        emit('response', {'message': 'Erreur lors du traitement: ' + str(e), 'type': 'error'})
+        return
     
     # Envoi d'un accusé de réception
     emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
