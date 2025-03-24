@@ -1,0 +1,58 @@
+.qodo
+# Ignorer les fichiers de configuration spécifiques à un environnement
+.env
+
+# Ignorer les fichiers de cache Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignorer les fichiers de configuration de l'éditeur
+.vscode/
+.idea/
+
+# Ignorer les fichiers de log
+*.log
+
+# Ignorer les fichiers temporaires
+*.tmp
+
+# Ignorer les fichiers de cache
+*.cache
+
+# Ignorer les fichiers générés par les outils de build
+dist/
+build/
+
+# Ignorer les fichiers de configuration de l'environnement virtuel
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# Ignorer les fichiers de configuration de l'outil de gestion des dépendances
+Pipfile.lock
+poetry.lock
+
+# Ignorer les fichiers de configuration de l'outil de test
+.coverage
+.tox/
+.nox/
+
+# Ignorer les fichiers de configuration de l'outil de linting
+.flake8
+.mypy_cache/
+
+# Ignorer les fichiers de configuration de l'outil de documentation
+docs/_build/
+
+# Ignorer les fichiers de configuration de l'outil de déploiement
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+# Ignorer les fichiers de configuration de l'outil de gestion des secrets
+.secrets/

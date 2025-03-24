@@ -1,21 +1,188 @@
-# app.py
-
 import os
 import json
 import asyncio
 import logging
-from datetime import datetime, timezone
 import time
-import threading
 import traceback
 from functools import wraps
-from gevent import monkey
-monkey.patch_all()
-import nest_asyncio
-nest_asyncio.apply()
-from flask import Flask, render_template, request, jsonify, session, current_app
+from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
+from dotenv import load_dotenv
+import uuid
+import sqlalchemy.orm.exc as sa_exc
+from openai import OpenAIError
+
+from configuration import logger, global_cache
+from base_de_donnees import SessionLocal, init_db
+from chatbot import ChatBot
+from search_factory import search_factory
+
+# Classe pour gérer les travaux asynchrones avec système de priorité
+class AsyncWorkerPool:
+    """
+    Pool de workers asynchrones avec file d'attente prioritaire.
+    Remplace l'utilisation de threads par des tâches asyncio.
+    """
+    def __init__(self, max_workers=10, loop=None):
+        self.max_workers = max_workers
+        self.active_tasks = set()
+        self.queue = asyncio.PriorityQueue()
+        self.loop = loop or asyncio.get_event_loop()
+        self.logger = logging.getLogger('ITS_HELP.worker_pool')
+        
+    async def submit(self, coroutine, priority=0, user_id=None, timeout=None):
+        """
+        Soumet une tâche coroutine au pool avec gestion de priorité.
+        
+        Args:
+            coroutine: Coroutine à exécuter
+            priority: Priorité (plus petit = plus prioritaire)
+            user_id: Identifiant utilisateur pour le traçage
+            timeout: Timeout en secondes (None = pas de timeout)
+        """
+        # Placer la tâche dans la file d'attente avec sa priorité
+        task_id = f"{user_id or 'system'}_{int(time.time())}"
+        await self.queue.put((priority, (coroutine, user_id, task_id, timeout)))
+        self.logger.debug(f"Tâche {task_id} ajoutée à la file d'attente avec priorité {priority}")
+        
+        # Déclencher le traitement si des workers sont disponibles
+        if len(self.active_tasks) < self.max_workers:
+            asyncio.create_task(self._process_queue())
+            
+        return task_id
+    
+    async def _process_queue(self):
+        """Traite la file d'attente des tâches en respectant la priorité"""
+        while not self.queue.empty() and len(self.active_tasks) < self.max_workers:
+            # Extraction de la tâche avec la plus haute priorité
+            _, (coroutine, user_id, task_id, timeout) = await self.queue.get()
+            
+            # Création et exécution de la tâche
+            task = asyncio.create_task(self._run_task(coroutine, user_id, task_id, timeout))
+            self.active_tasks.add(task)
+            
+            # Nettoyer la tâche quand elle termine
+            task.add_done_callback(lambda t: self.active_tasks.remove(t) 
+                                   if t in self.active_tasks else None)
+            
+    async def _run_task(self, coroutine, user_id, task_id, timeout):
+        """Exécute une tâche avec timeout et gestion d'erreurs"""
+        start_time = time.monotonic()
+        self.logger.info(f"Démarrage tâche {task_id} pour utilisateur {user_id}")
+        
+        try:
+            # Exécution avec timeout si spécifié
+            if timeout:
+                return await asyncio.wait_for(coroutine, timeout=timeout)
+            else:
+                return await coroutine
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - start_time
+            self.logger.error(f"Timeout pour tâche {task_id} après {elapsed:.2f}s")
+            return None
+        except Exception as e:
+            self.logger.error(f"Erreur dans tâche {task_id}: {str(e)}")
+            self.logger.error(traceback.format_exc())
+            return None
+        finally:
+            elapsed = time.monotonic() - start_time
+            self.logger.info(f"Fin tâche {task_id}, durée: {elapsed:.2f}s")
+            
+    def get_stats(self):
+        """Retourne des statistiques sur l'état du pool"""
+        return {
+            "active_tasks": len(self.active_tasks),
+            "queued_tasks": self.queue.qsize(),
+            "max_workers": self.max_workers
+        }
+
+# Classe pour gérer l'état global de l'application
+class ApplicationContext:
+    """
+    Gère l'état global et les dépendances de l'application.
+    Cette classe centralise les initialisations et permet un accès unifié
+    aux différentes ressources partagées.
+    """
+    
+    def __init__(self):
+        """Initialise les attributs mais n'effectue pas les initialisations couteuses"""
+        self.db_initialized = False
+        self.chatbot = None
+        self.initialized = False
+        self.initialization_attempt = False
+        self.initialization_time = None
+        self.logger = logging.getLogger('ITS_HELP.app_context')
+        self.errors = []
+        self.initialization_lock = asyncio.Lock()
+    
+    async def init_database(self):
+        """Initialise la base de données"""
+        if self.db_initialized:
+            return True
+            
+        self.logger.info("Initialisation de la base de données")
+        try:
+            # Initialiser la base de données
+            await init_db()
+            self.db_initialized = True
+            return True
+        except Exception as e:
+            self.logger.error(f"Erreur lors de l'initialisation de la base de données: {str(e)}")
+            self.errors.append(str(e))
+            return False
+    
+    async def init_cache(self):
+        """Initialise et préchauffe le cache"""
+        self.logger.info("Initialisation du cache")
+        try:
+            # Préchargement des données de cache fréquemment utilisées
+            global_cache.clear('embeddings')  # Assurer que le cache démarre proprement
+            
+            # Vérification du cache
+            cache_status = global_cache.status()
+            self.logger.info(f"État du cache: {json.dumps(cache_status)}")
+            
+            # Cache initialisé avec succès
+            return True
+        except Exception as e:
+            self.logger.error(f"Erreur lors de l'initialisation du cache: {str(e)}")
+            self.errors.append(str(e))
+            return False
+    
+    async def init_search_factory(self):
+        """Initialise la factory de recherche"""
+        self.logger.info("Initialisation de la factory de recherche")
+        try:
+            # Initialisation de la factory de recherche
+            await search_factory.initialize()
+            return True
+        except Exception as e:
+            self.logger.error(f"Erreur lors de l'initialisation de la factory de recherche: {str(e)}")
+            self.errors.append(str(e))
+            return False
+    
+    async def init_chatbot(self):
+        """Initialise le chatbot"""
+        self.logger.info("Initialisation du chatbot")
+        try:
+            self.chatbot = ChatBot(
+                db_session_factory=SessionLocal,
+                search_factory=search_factory,
+                cache=global_cache
+            )
+            return True
+        except Exception as e:
+            self.logger.error(f"Erreur lors de l'initialisation du chatbot: {str(e)}")
+            self.errors.append(str(e))
+            return False
+
+# Création de l'instance globale du contexte
+app_context = ApplicationContext()
+
+# Création de l'instance globale du pool de workers
+worker_pool = AsyncWorkerPool(max_workers=10)
+
 def process_data(data):
     logger.info("process_data called with data: %s", data)
     print("process_data called with data:", data)
@@ -23,45 +190,32 @@ def process_data(data):
     # Remplacer "test_user" par l'identifiant utilisateur réel si nécessaire
     user_id = "test_user"
     run_process_message(user_id, data)
-from dotenv import load_dotenv
-from sqlalchemy import text
-# Imports depuis le code optimisé
-from base_de_donnees import SessionLocal, Conversation, init_db
-from chatbot import ChatBot
-from configuration import logger, global_cache
-from search_factory import search_factory
+
 # Configuration de Flask
 app = Flask(__name__)
 socketio = SocketIO(
     app, 
     cors_allowed_origins="*", 
-    async_mode='gevent',  # Utiliser gevent pour une meilleure compatibilité avec Gunicorn et Render
-    ping_timeout=30,  # 30 secondes pour le ping timeout
-    ping_interval=15,  # 15 secondes pour l'intervalle de ping
-    max_http_buffer_size=1024 * 1024,  # 1MB buffer
-    engineio_logger=True  # Activer les logs Engine.IO pour le debugging
+    async_mode='asyncio',  
+    ping_timeout=30,  
+    ping_interval=15,  
+    max_http_buffer_size=1024 * 1024,  
+    engineio_logger=True  
 )
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'its_help_secret_key')
 # Augmentation des timeouts
-app.config['TIMEOUT'] = 60  # 60 secondes pour les requêtes
-app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 heure pour les sessions
+app.config['TIMEOUT'] = 60  
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  
 
 # Configuration de CORS avec options explicites
 CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
+
 """Exemple de remplacement d'un appel asyncio.run par start_background_task """
 @app.route('/process')
 def process():
     data = request.args.get('data')
     socketio.start_background_task(process_data, data)
     return "Processing started"
-
-# Variables globales et initialisations différées
-chatbot = None
-_is_initialized = False
-_initialization_started = False
-_db_initialized = False
-_search_factory_initialized = False
-_cache_initialized = False
 
 # Chargement des variables d'environnement
 load_dotenv()
@@ -96,7 +250,6 @@ def index():
     """Page d'accueil du chatbot"""
     return render_template('index.html')
 
-
 @socketio.on('connect')
 def handle_connect():
     """Gestion de la connexion SocketIO"""
@@ -126,502 +279,164 @@ def handle_message(data):
     message = data.get('message', '')
     logger.info("handle_message déclenché, user_id: %s, message: %s", user_id, message)
     print("handle_message déclenché, data reçues:", data)
-    if not chatbot:
+    
+    # Utilisation du chatbot depuis le contexte d'application
+    if not app_context.chatbot:
         emit('response', {
             'message': 'Le service est en cours d\'initialisation, veuillez patienter quelques instants...',
             'type': 'status',
             'initializing': True
         })
         # Passer le mode au traitement
-        
         return
-    socketio.start_background_task(run_process_message, user_id, message, mode)    
+        
+    # Utiliser le pool de workers pour soumettre le traitement asynchrone
+    asyncio.run_coroutine_threadsafe(
+        worker_pool.submit(
+            process_message(user_id, message, mode),
+            priority=1,  # Priorité standard
+            user_id=user_id,
+            timeout=120  # Timeout de 2 minutes
+        ),
+        asyncio.get_event_loop()
+    )
+    
     # Envoi d'un accusé de réception
     emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
-    
-active_threads = set()
-MAX_CONCURRENT_THREADS = 10
-def run_process_message(user_id, message, mode):
-    thread_id = f"{user_id}_{int(time.time())}"
-    
-    # Vérifier si le nombre maximum de threads est atteint
-    if len(active_threads) >= MAX_CONCURRENT_THREADS:
-        socketio.emit('response', {
-            'message': 'Le service est actuellement très sollicité. Veuillez réessayer plus tard.',
-            'type': 'error'
-        }, room=user_id)
-        return
-        
-    def target():
-        try:
-            active_threads.add(thread_id)
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                # Exécution avec une future pour capture d'erreurs
-                future = asyncio.ensure_future(process_message(user_id, message, mode), loop=loop)
-                loop.run_until_complete(future)
-            except Exception as e:
-                logger.error(f"Erreur dans run_process_message: {str(e)}", exc_info=True)
-            finally:
-                loop.close()
-        finally:
-            active_threads.discard(thread_id)
-            
-        
-    threading.Thread(target=target, daemon=True).start()
-    logger.info(f"Thread de traitement démarré pour message: {message[:30]}...")
+
+def run_process_message(user_id, message, mode="detail"):
+    """
+    Version compatible de l'ancienne fonction utilisant le pool de workers.
+    Cette fonction est maintenue pour compatibilité avec le code existant.
+    """
+    # Utiliser le pool de workers pour soumettre la tâche
+    asyncio.run_coroutine_threadsafe(
+        worker_pool.submit(
+            process_message(user_id, message, mode),
+            priority=2,  # Priorité inférieure aux messages SocketIO directs
+            user_id=user_id,
+            timeout=120  # Timeout de 2 minutes
+        ),
+        asyncio.get_event_loop()
+    )
+    logger.info(f"Tâche de traitement soumise au pool pour message: {message[:30]}...")
+
 async def process_message(user_id, message, mode):
     """Traite le message de manière asynchrone avec gestion améliorée des erreurs"""
-    start_time = time.monotonic()
-    global stats
-
+    start_time = time.time()
+    logger.info(f"Début de traitement du message pour user_id: {user_id}")
+    
+    # Créer un ID de corrélation unique pour tracer les logs    
+    correlation_id = str(uuid.uuid4())
+    context_logger = logging.LoggerAdapter(
+        logger, 
+        {'correlation_id': correlation_id, 'user_id': user_id}
+    )
+    
+    # Afficher un message de chargement
+    socketio.emit('response', {
+        'message': 'Analyse en cours...',
+        'type': 'thinking',
+        'correlation_id': correlation_id
+    }, room=user_id)
+    
+    # Vérifier si l'initialisation est terminée
+    if not app_context.initialized:
+        await wait_for_initialization(user_id, max_wait=30)  # Max 30 secondes
+        if not app_context.initialized:
+            socketio.emit('response', {
+                'message': 'Le service n\'est pas encore disponible, veuillez réessayer dans quelques instants.',
+                'type': 'error'
+            }, room=user_id)
+            return
+    
     try:
-        # Création d'une session dédiée à la conversation
-        async with SessionLocal() as db:
-            # Récupération ou création de la conversation
-            result = await db.execute(
-                text("SELECT * FROM conversations WHERE user_id = :user_id"),
-                {"user_id": user_id}
-            )
-            conversation = result.fetchone()
+        # Récupérer le chatbot depuis le contexte d'application
+        chatbot_instance = app_context.chatbot
+        
+        # Mesure du temps de traitement
+        context_logger.info(f"Appel du chatbot pour analyser: {message[:50]}...")
+        
+        # Traitement proprement dit
+        response = await chatbot_instance.process(user_id, message, mode)
+        
+        processing_time = time.time() - start_time
+        context_logger.info(f"Traitement terminé en {processing_time:.2f}s")
+        
+        # Format de réponse attendu pour la compatibilité
+        socketio.emit('response', response, room=user_id)
 
-            if not conversation:
-                # Création d'une nouvelle conversation
-                current_time = datetime.now(timezone.utc).isoformat()
-                await db.execute(
-                    text("""
-                    INSERT INTO conversations (user_id, context, last_updated)
-                    VALUES (:user_id, :context, :updated)
-                    """),
-                    {
-                        "user_id": user_id,
-                        "context": "{}",
-                        "updated": current_time
-                    }
-                )
-                await db.commit()
-
-                # Récupération de la conversation nouvellement créée
-                result = await db.execute(
-                    text("SELECT * FROM conversations WHERE user_id = :user_id"),
-                    {"user_id": user_id}
-                )
-                conversation = result.fetchone()
-
-            # Traitement du message par le chatbot
-            response = await chatbot.process_web_message(message, conversation, user_id, mode)
-
-            # Vérification du contenu de la réponse avant envoi
-            if not response or not isinstance(response, dict):
-                logger.error(f"Réponse invalide: {response}")
-                response = {
-                    'message': 'Erreur de formatage de la réponse',
-                    'blocks': [{
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": "Une erreur est survenue lors du formatage des résultats."
-                        }
-                    }],
-                    'type': 'error'
-                }
-
-            # Log détaillé pour debug
-            blocks_count = len(response.get('blocks', []))
-            logger.info(f"Préparation envoi réponse: {blocks_count} blocs, type={response.get('type', 'message')}")
-
-            # Mise à jour du contexte avec les résultats de recherche
-            try:
-                context = json.loads(conversation.context) if conversation.context else {}
-
-                # Mise à jour du contexte avec les derniers résultats
-                if hasattr(chatbot, '_last_search_results'):
-                    # Conversion des objets résultats en dictionnaires sérialisables
-                    serializable_results = []
-                    for result in chatbot._last_search_results:
-                        if hasattr(result, 'payload') and hasattr(result, 'score'):
-                            # Extraire le payload de manière sécurisée
-                            if isinstance(result.payload, dict):
-                                payload = result.payload
-                            else:
-                                payload = result.payload.__dict__ if hasattr(result.payload, '__dict__') else {}
-
-                            # Créer un dictionnaire sérialisable
-                            serializable_result = {
-                                'score': float(result.score),
-                                'payload': payload
-                            }
-                            serializable_results.append(serializable_result)
-
-                    context['last_results'] = serializable_results
-
-                # Mettre à jour le contexte dans la base de données
-                await db.execute(
-                    text("""
-                    UPDATE conversations
-                    SET context = :context, last_updated = :updated_time
-                    WHERE user_id = :user_id
-                    """),
-                    {
-                        "context": json.dumps(context),
-                        "updated_time": datetime.now(timezone.utc).isoformat(),
-                        "user_id": user_id
-                    }
-                )
-                await db.commit()
-            except Exception as ctx_err:
-                logger.error(f"Erreur mise à jour contexte: {str(ctx_err)}")
-
-            # Mise à jour des statistiques
-            elapsed_time = time.monotonic() - start_time
-            stats["requests_total"] = stats.get("requests_total", 0) + 1
-            stats["response_time_sum"] = stats.get("response_time_sum", 0) + elapsed_time
-            if stats["requests_total"] > 0:
-                stats["avg_response_time"] = stats["response_time_sum"] / stats["requests_total"]
-            else:
-                stats["avg_response_time"] = 0
-
-            # Mise à jour de la dernière interaction
-            current_time = datetime.now(timezone.utc).isoformat()
-            await db.execute(
-                text("""
-                UPDATE conversations
-                SET last_interaction = :interaction_time
-                WHERE user_id = :user_id
-                """),
-                {
-                    "interaction_time": current_time,
-                    "user_id": user_id
-                }
-            )
-            await db.commit()
-
-            # Envoi de la réponse via SocketIO
-            try:
-                # Validation de la réponse
-                if not response or not isinstance(response, dict):
-                    logger.error(f"Réponse invalide: {response}")
-                    response = {
-                        'text': 'Erreur de formatage',
-                        'blocks': [{
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": "Erreur lors du formatage des résultats."}
-                        }]
-                    }
-                
-                # Sérialisation sécurisée
-                try:
-                    json_response = json.dumps({
-                        'message': response.get('text', 'Pas de réponse'),
-                        'blocks': response.get('blocks', []),
-                        'type': 'message',
-                        'response_time': round(elapsed_time, 2)
-                    })
-                    response_size = len(json_response)
-                    logger.info(f"Réponse sérialisée: {response_size/1024:.1f} KB")
-                except (TypeError, ValueError) as e:
-                    logger.error(f"Erreur sérialisation: {str(e)}")
-                    # Fallback à une réponse simple
-                    socketio.emit('response', {
-                        'message': 'Erreur de formatage',
-                        'blocks': [{
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": "Erreur lors du formatage des résultats"}
-                        }],
-                        'type': 'error'
-                    }, room=user_id)
-            except Exception as e:
-                logger.error(f"Erreur envoi réponse: {str(e)}")
-                socketio.emit('response', {'message': f"Erreur: {str(e)}", 'type': 'error'}, room=user_id)
-
-    except Exception as e:
-        # Journalisation détaillée de l'erreur
-        error_details = {
-            "timestamp": datetime.now().isoformat(),
-            "message": str(e),
-            "traceback": traceback.format_exc()
-        }
-
-        logger.error(f"Erreur traitement message: {str(e)}\n{traceback.format_exc()}")
-        stats["error_count"] = stats.get("error_count", 0) + 1
-
-        # Conservation des 10 dernières erreurs
-        if "last_errors" not in stats:
-            stats["last_errors"] = []
-        stats["last_errors"].append(error_details)
-        if len(stats["last_errors"]) > 10:
-            stats["last_errors"].pop(0)
-
-        # Envoi d'un message d'erreur formaté
+    except OpenAIError as e:
+        context_logger.error(f"Erreur OpenAI: {str(e)}")
         socketio.emit('response', {
-            'message': f"Erreur lors du traitement: {str(e)}",
-            'type': 'error',
-            'error_id': stats["error_count"]
+            'message': f"Erreur lors de l'analyse: {str(e)}",
+            'type': 'error'
+        }, room=user_id)
+    except sa_exc.NoResultFound as e:
+        context_logger.error(f"Erreur base de données (no result): {str(e)}")
+        socketio.emit('response', {
+            'message': "Session non trouvée, veuillez réessayer.",
+            'type': 'error'
+        }, room=user_id)
+    except Exception as e:
+        error_info = traceback.format_exc()
+        context_logger.error(f"Erreur inattendue: {str(e)}")
+        context_logger.error(error_info)
+        
+        # Formatting résultat
+        if hasattr(e, 'format_as_blocks'):
+            try:
+                blocks = e.format_as_blocks()
+                socketio.emit('response', {
+                    'blocks': blocks,
+                    'type': 'error'
+                }, room=user_id)
+                return
+            except Exception as format_err:
+                context_logger.error(f"Erreur formatage résultats: {str(format_err)}")
+                
+        # Émission du message d'erreur
+        socketio.emit('response', {
+            'message': "Une erreur est survenue lors du traitement de votre demande.",
+            'error': str(e),
+            'type': 'error'
         }, room=user_id)
 
+async def wait_for_initialization(user_id, max_wait=30):
+    """Attend que l'initialisation soit terminée avec un timeout"""
+    start_time = time.time()
+    while not app_context.initialized and time.time() - start_time < max_wait:
+        # Feedback à l'utilisateur sur l'état de l'initialisation
+        socketio.emit('response', {
+            'message': f'Initialisation en cours ({time.time() - start_time:.1f}s)...',
+            'type': 'status'
+        }, room=user_id)
+        
+        # Attendre un peu avant de vérifier à nouveau
+        await asyncio.sleep(2)
+    
+    return app_context.initialized
 
 def ensure_initialization():
     """S'assure que l'initialisation est lancée dans le contexte de l'application"""
-    global _initialization_started
-    if not _initialization_started:
-        initialize()
+    if not app_context.initialization_attempt:
+        logger.info("Démarrage de l'initialisation du chatbot")
+        socketio.start_background_task(initialize)
 
-def initialize():
+async def initialize():
     """Initialisation progressive des composants au démarrage"""
-    global chatbot, _is_initialized, _initialization_started
-    
-    # Éviter les initialisations multiples
-    if _is_initialized:
-        return
+    async with app_context.initialization_lock:
+        if app_context.initialization_attempt:
+            return
         
-    # S'assurer qu'on est dans un contexte d'application Flask
-    if not current_app:  # Si nous sommes hors du contexte d'application
-        with app.app_context():  # Créer un contexte d'application
-            _do_initialize()
-    else:
-        _do_initialize()
+        app_context.initialization_attempt = True
         
-async def verify_clients_loaded():
-    try:
-        from sqlalchemy import func, select
-        from base_de_donnees import SessionLocal, Client
-        async with SessionLocal() as session:
-            result = await session.execute(select(func.count()).select_from(Client))
-            count = result.scalar()
-            logger.info(f"Base clients initialisée avec {count} entrées")
-    except Exception as e:
-        logger.error(f"Échec vérification clients: {str(e)}")
-
-def _do_initialize():
-    global chatbot, _is_initialized, _initialization_started, _db_initialized
-    
-    app.config['start_time'] = time.time()
-    _initialization_started = True
-    
-    # Marquer la BD comme initialisée
-    _db_initialized = True
-
-    # Lancer l'initialisation dans un thread séparé avec timeout global
-    import threading
-    def async_init():
-        global _is_initialized, chatbot
+        await app_context.init_database()
+        await app_context.init_cache()
+        await app_context.init_search_factory()
+        await app_context.init_chatbot()
         
-        # Créer une nouvelle boucle pour ce thread
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
-        
-        try:
-            with app.app_context():
-                try:
-                    # Création du chatbot sans attendre la BD
-                    chatbot = ChatBot(
-                        openai_key=os.getenv('OPENAI_API_KEY'),
-                        qdrant_url=os.getenv('QDRANT_URL'),
-                        qdrant_api_key=os.getenv('QDRANT_API_KEY')
-                    )
-                    _is_initialized = True
-                    logger.info("Chatbot initialisé avec succès")
-                    
-                    # Lancer l'initialisation de la BD en arrière-plan
-                    new_loop.create_task(init_db())
-                    # Appel de l'initialisation des clients
-                    from gestion_clients import initialize_clients_with_validation
-                    new_loop.create_task(initialize_clients_with_validation())
-                    logger.info("Initialisation des clients lancée")
-                except Exception as e:
-                    logger.critical(f"Erreur initialisation chatbot: {str(e)}")
-                    logger.critical(traceback.format_exc())
-        except Exception as e:
-            logger.critical(f"Erreur dans le thread d'initialisation: {str(e)}")
-            logger.critical(traceback.format_exc())
-        finally:
-            # Garder la boucle en vie pour les tâches en arrière-plan
-            try:
-                new_loop.run_forever()
-            except Exception:
-                pass
-    
-    # Démarrer le thread d'initialisation en arrière-plan
-    init_thread = threading.Thread(target=async_init)
-    init_thread.daemon = True
-    init_thread.start()
-    logger.info("Thread d'initialisation démarré")
-    
-async def init_minimal_db(engine):
-    """Initialisation minimale de la base de données en cas d'urgence"""
-    from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy.orm import sessionmaker
-    from base_de_donnees import Base  # Import explicite de Base
-    
-    # Création d'une session en mémoire
-    async_session = sessionmaker(
-        engine, expire_on_commit=False, class_=AsyncSession
-    )
-    
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    
-    return async_session
-@app.before_request
-def before_request_func():
-    global _is_initialized, _initialization_started, chatbot
-    global _db_initialized, _search_factory_initialized
-
-    # Pour les health checks, permettre l'accès même pendant l'initialisation
-    if request.path == '/health':
-        return None
-        
-    # Si déjà initialisé, continuer normalement
-    if _is_initialized and chatbot is not None:
-        return None
-        
-    # Si l'initialisation n'a pas encore commencé, la démarrer
-    if not _initialization_started:
-        with app.app_context():
-            initialize()
-        return jsonify({
-            "status": "starting",
-            "message": "Le service démarre, veuillez réessayer dans quelques instants"
-        }), 503  # Service Unavailable
-    
-    # Tentative d'initialisation tardive du chatbot si les composants essentiels sont prêts
-    if _db_initialized and _search_factory_initialized and not _is_initialized:
-        try:
-            chatbot = ChatBot(
-                openai_key=os.getenv('OPENAI_API_KEY'),
-                qdrant_url=os.getenv('QDRANT_URL'),
-                qdrant_api_key=os.getenv('QDRANT_API_KEY')
-            )
-            _is_initialized = True
-            logger.info("Chatbot initialisé avec succès (late init)")
-            return None
-        except Exception as e:
-            logger.error(f"Erreur initialisation tardive du chatbot: {str(e)}")
-    
-    # Pour les autres routes, renvoyer un statut d'initialisation détaillé
-    components = {
-        "database": _db_initialized,
-        "search_factory": _search_factory_initialized,
-        "cache": _cache_initialized
-    }
-    
-    return jsonify({
-        "status": "initializing",
-        "message": "Le service est en cours d'initialisation, veuillez réessayer dans quelques instants",
-        "components": components
-    }), 503  # Service Unavailable
-# Décorateur de timeout
-def timeout_handler(seconds=2, default_response=None):
-    """Décorateur pour ajouter un timeout aux routes Flask"""
-    def decorator(f):
-        from functools import wraps
-        @wraps(f)
-        def wrapped(*args, **kwargs):
-            from threading import Thread
-            import queue
-            
-            result_queue = queue.Queue()
-
-            def target():
-                try:
-                    result_queue.put(f(*args, **kwargs))
-                except Exception as e:
-                    logger.error(f"Erreur dans route avec timeout: {str(e)}")
-                    result_queue.put(jsonify({
-                        "status": "error",
-                        "message": f"Erreur interne: {str(e)}"
-                    }), 500)
-            
-            thread = Thread(target=target)
-            thread.daemon = True
-            thread.start()
-            thread.join(timeout=seconds)
-
-            if thread.is_alive():
-                logger.warning(f"Timeout de {seconds}s atteint pour {f.__name__}")
-                response_data = default_response or {"status": "timeout", "message": f"La requête a pris plus de {seconds}s et a été interrompue"}
-                return jsonify(response_data), 503
-            
-            return result_queue.get_nowait() if not result_queue.empty() else jsonify({
-                "status": "error",
-                "message": "Aucune réponse du serveur"
-            }), 500
-        
-        return wrapped
-    return decorator
-
-@app.route('/health')
-@timeout_handler(seconds=2, default_response={"status": "timeout", "message": "Health check timeout"})
-def health():
-    """Endpoint de vérification de santé avec état détaillé"""
-    global _is_initialized, _initialization_started
-    global _db_initialized, _search_factory_initialized, _cache_initialized
-    
-    if not _initialization_started:
-        status = "starting"
-    elif not _is_initialized:
-        status = "initializing"
-    else:
-        status = "ok"
-
-    # Vérifier si 'start_time' est défini avant de calculer l'uptime
-    start_time = app.config.get('start_time', time.time())  # Fallback à time.time() si non défini
-    uptime = time.time() - start_time
-
-    health_stats = {
-        "uptime": uptime,
-        "requests": stats.get("requests_total", 0),
-        "errors": stats.get("error_count", 0),
-        "avg_response_time": stats.get("avg_response_time", 0),
-        "initialization_status": status
-    }
-
-    components = {
-        "database": _db_initialized,
-        "search_factory": _search_factory_initialized,
-        "cache": _cache_initialized,
-        "chatbot": _is_initialized and chatbot is not None
-    }
-
-    health_stats["components"] = components
-
-    return jsonify({
-        "status": status, 
-        "timestamp": datetime.now().isoformat(),
-        "checks": components,
-        "stats": health_stats
-    })
-
-
-@app.route('/api/stats')
-def get_stats():
-    """API pour récupérer les statistiques d'utilisation"""
-    return jsonify(stats)
-
-@app.route('/api/cache/stats')
-@async_route
-async def get_cache_stats():
-    """API pour récupérer les statistiques du cache"""
-    if hasattr(global_cache, 'get_stats'):
-        return jsonify(await global_cache.get_stats())
-    return jsonify({"error": "Cache stats not available"}), 404
-
-@app.route('/api/cache/clear', methods=['POST'])
-@async_route
-async def clear_cache():
-    """API pour vider le cache"""
-    if hasattr(global_cache, 'invalidate'):
-        await global_cache.invalidate()
-        return jsonify({"status": "Cache cleared"}), 200
-    return jsonify({"error": "Cache control not available"}), 404
-
-@app.route('/api/embeddings/stats')
-def get_embedding_stats():
-    """API pour récupérer les statistiques d'embedding"""
-    if chatbot and hasattr(chatbot.embedding_service, 'get_stats'):
-        return jsonify(chatbot.embedding_service.get_stats())
-    return jsonify({"error": "Embedding stats not available"}), 404
+        app_context.initialized = True
 
 if __name__ == '__main__':
     # Configuration avancée du logging
