@@ -5,11 +5,13 @@ import logging
 import time
 import traceback
 from functools import wraps
+from importlib.util import find_spec
+import uuid
+
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from dotenv import load_dotenv
-import uuid
 import sqlalchemy.orm.exc as sa_exc
 from openai import OpenAIError
 
@@ -17,6 +19,10 @@ from configuration import logger, global_cache
 from base_de_donnees import SessionLocal, init_db
 from chatbot import ChatBot
 from search_factory import search_factory
+
+# Vérification de disponibilité des libs de transport pour Socket.IO
+has_eventlet = find_spec("eventlet") is not None
+has_gevent = find_spec("gevent") is not None
 
 # Classe pour gérer les travaux asynchrones avec système de priorité
 class AsyncWorkerPool:
@@ -193,14 +199,27 @@ def process_data(data):
 
 # Configuration de Flask
 app = Flask(__name__)
+
+# Détection du meilleur mode asynchrone disponible
+async_mode = None
+if has_eventlet:
+    async_mode = 'eventlet'
+elif has_gevent:
+    async_mode = 'gevent'
+else:
+    async_mode = 'threading'  # Fallback sûr pour tous les environnements
+
+logger.info(f"Utilisation du mode asynchrone: {async_mode}")
+
+# Configuration de SocketIO avec détection du meilleur mode disponible
 socketio = SocketIO(
     app, 
     cors_allowed_origins="*", 
-    async_mode='asyncio',  
+    async_mode=async_mode,  # Mode détecté automatiquement
     ping_timeout=30,  
     ping_interval=15,  
     max_http_buffer_size=1024 * 1024,  
-    engineio_logger=True  
+    engineio_logger=True if os.getenv('DEBUG', 'false').lower() == 'true' else False
 )
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'its_help_secret_key')
 # Augmentation des timeouts
