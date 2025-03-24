@@ -250,11 +250,18 @@ def process():
 load_dotenv()
 
 # Définition de la fonction ensure_initialization
+def initialize_wrapper():
+    """Wrapper non-async pour lancer la fonction initialize dans un environnement asynchrone"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(initialize())
+    loop.close()
+
 def ensure_initialization():
     """S'assure que l'initialisation est lancée dans le contexte de l'application"""
     if not app_context.initialization_attempt:
         logger.info("Démarrage de l'initialisation du chatbot")
-        socketio.start_background_task(initialize)
+        socketio.start_background_task(initialize_wrapper)
 
 # Démarrer l'initialisation au lancement de l'application
 ensure_initialization()
