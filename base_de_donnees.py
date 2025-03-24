@@ -5,6 +5,8 @@ import os
 import re
 import uuid
 import weakref
+import time
+from typing import Any
 
 import aiosqlite
 import sqlite3
@@ -12,7 +14,7 @@ import sqlite3
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import List, Optional, Any
+from typing import List, Optional
 
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, JSON, inspect,
@@ -515,3 +517,89 @@ class QdrantSessionManager:
                 except Exception as e:
                     logger.error(f"Erreur fermeture session: {e}")
             self._active_sessions.clear()
+
+class GlobalCache:
+    """
+    Classe de cache global pour stocker temporairement des données
+    avec expiration et catégorisation.
+    """
+    
+    def __init__(self):
+        self._cache = {}
+        self._lock = asyncio.Lock()
+        
+    async def get(self, key: str, category: str = "default"):
+        """
+        Récupère une valeur du cache par clé et catégorie.
+        
+        Args:
+            key: Clé de l'élément
+            category: Catégorie de l'élément (défaut: "default")
+            
+        Returns:
+            Valeur ou None si non trouvée/expirée
+        """
+        async with self._lock:
+            full_key = f"{category}:{key}"
+            if full_key in self._cache:
+                item = self._cache[full_key]
+                # Vérification de l'expiration
+                if item['expires'] is None or item['expires'] > time.time():
+                    return item['value']
+                else:
+                    # Suppression des éléments expirés
+                    del self._cache[full_key]
+            return None
+            
+    async def set(self, key: str, value: Any, category: str = "default", ttl: int = None):
+        """
+        Définit une valeur dans le cache avec expiration optionnelle.
+        
+        Args:
+            key: Clé de l'élément
+            value: Valeur à stocker
+            category: Catégorie de l'élément (défaut: "default")
+            ttl: Durée de vie en secondes (None = pas d'expiration)
+        """
+        async with self._lock:
+            full_key = f"{category}:{key}"
+            expires = None if ttl is None else time.time() + ttl
+            self._cache[full_key] = {
+                'value': value,
+                'expires': expires,
+                'created': time.time()
+            }
+            
+    async def delete(self, key: str, category: str = "default"):
+        """
+        Supprime une entrée du cache.
+        
+        Args:
+            key: Clé de l'élément
+            category: Catégorie de l'élément (défaut: "default")
+        """
+        async with self._lock:
+            full_key = f"{category}:{key}"
+            if full_key in self._cache:
+                del self._cache[full_key]
+                
+    async def clear(self, category: str = None):
+        """
+        Vide le cache, entièrement ou par catégorie.
+        
+        Args:
+            category: Catégorie à vider (None = tout vider)
+        """
+        async with self._lock:
+            if category is None:
+                self._cache.clear()
+            else:
+                prefix = f"{category}:"
+                keys_to_delete = [k for k in self._cache.keys() if k.startswith(prefix)]
+                for key in keys_to_delete:
+                    del self._cache[key]
+
+# Création d'une instance globale du cache
+global_cache = GlobalCache()
+
+# Fin du fichier
