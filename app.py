@@ -445,11 +445,37 @@ async def process_message(user_id, message, mode):
         # Récupérer le chatbot depuis le contexte d'application
         chatbot_instance = app_context.chatbot
         
-        # Mesure du temps de traitement
-        context_logger.info(f"Appel du chatbot pour analyser: {message[:50]}...")
+        # Extraire les options de formatage si disponibles (pour compatibilité avec interface web)
+        options = {}
         
-        # Traitement proprement dit
-        response = await chatbot_instance.process(user_id, message, mode)
+        if isinstance(message, dict):
+            message_text = message.get('text', '')
+            options = {
+                'debug_zendesk': message.get('debug_zendesk', False),
+                'progressive': message.get('progressive', True),  # Par défaut, activer le formatage progressif
+                'timeout': message.get('timeout', 60)  # Timeout par défaut à 60 secondes
+            }
+        else:
+            message_text = message
+            options = {
+                'debug_zendesk': False,
+                'progressive': True,  # Par défaut, activer le formatage progressif
+                'timeout': 60  # Timeout par défaut à 60 secondes
+            }
+        
+        # Mesure du temps de traitement
+        context_logger.info(f"Appel du chatbot pour analyser: {message_text[:50]}...")
+        
+        # Traitement proprement dit avec les options
+        response = await chatbot_instance.process_web_message(
+            message_text, 
+            None,  # conversation 
+            user_id, 
+            mode,
+            debug_zendesk=options['debug_zendesk'],
+            progressive=options['progressive'],
+            timeout=options['timeout']
+        )
         
         processing_time = time.time() - start_time
         context_logger.info(f"Traitement terminé en {processing_time:.2f}s")

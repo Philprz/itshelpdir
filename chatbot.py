@@ -430,7 +430,7 @@ class ChatBot:
 
     
     async def format_response(self, results: List[Any], question: str = None,
-                       include_actions: bool = True) -> Dict:
+                       include_actions: bool = True, debug_zendesk: bool = False, progressive: bool = False) -> Dict:
         """
         Formate la réponse pour l'interface web avec blocs et actions.
 
@@ -438,12 +438,14 @@ class ChatBot:
             results: Liste des résultats de recherche
             question: Question originale (optionnelle)
             include_actions: Inclure les boutons d'action (optionnel)
+            debug_zendesk: Mode de débogage pour les résultats Zendesk (optionnel)
+            progressive: Mode de formatage progressif des résultats (optionnel)
 
         Returns:
             Dictionnaire formaté pour l'interface web
         """
-        self.logger.info(f"Formatage de {len(results)} résultats pour l'interface")
-
+        self.logger.info(f"Formatage de {len(results)} résultats. Progressive={progressive}, Debug Zendesk={debug_zendesk}")
+        
         # En cas d'absence de résultats
         if not results:
             no_results_blocks = [{
@@ -517,8 +519,33 @@ class ChatBot:
         # Récupération des types de sources pour le résumé
         source_types = {}
         for r in results:
-            source_type = self._detect_source_type(r)
-            source_types[source_type] = source_types.get(source_type, 0) + 1
+            try:
+                source_type = self._detect_source_type(r)
+                if source_type:
+                    source_types[source_type] = source_types.get(source_type, 0) + 1
+            except Exception as e:
+                self.logger.error(f"Erreur lors de la détection du type de source: {str(e)}")
+
+        # Mode de débogage Zendesk si activé
+        if debug_zendesk:
+            zendesk_count = source_types.get('zendesk', 0)
+            self.logger.info(f"Mode debug Zendesk activé. Nombre de résultats Zendesk: {zendesk_count}")
+            
+            # Log des détails des résultats Zendesk
+            for i, r in enumerate(results):
+                try:
+                    source_type = self._detect_source_type(r)
+                    if source_type == 'zendesk':
+                        # Extraction et log du payload
+                        if isinstance(r, dict):
+                            payload = r.get('payload', {})
+                        else:
+                            payload = r.payload if isinstance(r.payload, dict) else getattr(r.payload, '__dict__', {})
+                        
+                        # Log des clés présentes dans le payload
+                        self.logger.info(f"Zendesk résultat #{i+1} - Clés disponibles: {list(payload.keys() if isinstance(payload, dict) else [])}")
+                except Exception as e:
+                    self.logger.error(f"Erreur log debug Zendesk pour résultat #{i+1}: {str(e)}")
 
         # Ajout du résumé des sources
         source_summary = " | ".join([f"{count} {src.upper()}" for src, count in source_types.items()])
@@ -545,165 +572,334 @@ class ChatBot:
             if source_client:
                 source_clients[source_type] = source_client
 
-        # Formatage de chaque résultat en utilisant les clients de recherche
-        for r in results:
-            try:
-                # Extraction du payload et du score (conservé du code original)
-                if isinstance(r, dict):
-                    payload = r.get('payload', {})
-                    score = float(r.get('score', 0.0))
-                else:
-                    payload = r.payload if isinstance(r.payload, dict) else getattr(r.payload, '__dict__', {})
-                    score = float(getattr(r, 'score', 0.0))
-
-                # Détection de la source
-                source_type = self._detect_source_type(r)
-                
-                # Formatage via client spécialisé si disponible
-                if source_type in source_clients:
-                    source_client = source_clients[source_type]
-                    formatted_block = await source_client.format_for_slack(r)
-                    if formatted_block and isinstance(formatted_block, dict) and formatted_block.get("type"):
-                        formatted_blocks.append(formatted_block)
-                        formatted_blocks.append({"type": "divider"})
-                        continue
+        # Mode de formatage progressif si activé
+        if progressive:
+            self.logger.info("Utilisation du mode de formatage progressif")
+            
+            # Formatage individuel pour chaque résultat avec gestion des erreurs individuelles
+            for i, r in enumerate(results):
+                try:
+                    # Extraction du payload et du score
+                    if isinstance(r, dict):
+                        payload = r.get('payload', {})
+                        score = float(r.get('score', 0.0))
                     else:
-                        # Log et continue avec le prochain résultat sans utiliser le formatage par défaut
-                        current_source_type = self._detect_source_type(r)
-                        self.logger.warning(f"Bloc formaté invalide ignoré pour {current_source_type}")
-                        
-                # Sinon, fallback au formatage de base (code original conservé)
-                score_percent = round(score * 100)
-                fiabilite = "🟢" if score_percent > 80 else "🟡" if score_percent > 60 else "🔴"
+                        payload = r.payload if isinstance(r.payload, dict) else getattr(r.payload, '__dict__', {})
+                        score = float(getattr(r, 'score', 0.0))
 
-                # Extraction des champs communs avec fallbacks
-                title = payload.get('summary', '') or payload.get('title', '') or "Sans titre"
-                content = str(payload.get('content', '') or payload.get('text', '') or "Pas de contenu")
-                if len(content) > 500:
-                    content = content[:497] + "..."
+                    # Détection de la source
+                    source_type = self._detect_source_type(r)
+                    
+                    # Format de base en cas d'échec du formatage spécifique
+                    basic_block = None
+                    
+                    # Essayer d'utiliser le client spécialisé pour la source
+                    try:
+                        if source_type in source_clients:
+                            source_client = source_clients[source_type]
+                            formatted_block = await source_client.format_for_slack(r)
+                            if formatted_block and isinstance(formatted_block, dict) and formatted_block.get("type"):
+                                formatted_blocks.append(formatted_block)
+                                formatted_blocks.append({"type": "divider"})
+                                continue
+                            else:
+                                self.logger.warning(f"Bloc formaté invalide pour {source_type} (résultat #{i+1}), utilisation du formatage par défaut")
+                    except Exception as format_error:
+                        self.logger.error(f"Erreur lors du formatage spécifique pour {source_type} (résultat #{i+1}): {str(format_error)}")
+                    
+                    # Formatage par défaut si le client spécialisé a échoué
+                    score_percent = round(score * 100)
+                    fiabilite = "🟢" if score_percent > 80 else "🟡" if score_percent > 60 else "🔴"
 
-                # Construction d'un bloc de texte basique qui fonctionne pour tout type de source
-                basic_text = f"*{source_type.upper()}* - {fiabilite} {score_percent}%\n"
+                    # Extraction des champs communs avec fallbacks
+                    title = payload.get('summary', '') or payload.get('title', '') or "Sans titre"
+                    content = str(payload.get('content', '') or payload.get('text', '') or "Pas de contenu")
+                    if len(content) > 500:
+                        content = content[:497] + "..."
 
-                if source_type in ['jira', 'zendesk']:
-                    id_field = payload.get('key', '') or payload.get('ticket_id', '') or payload.get('id', '')
-                    client = payload.get('client', 'N/A')
-                    status = payload.get('resolution', '') or payload.get('status', 'En cours')
-                    assignee = payload.get('assignee', 'Non assigné')
-                    created = self._format_date(payload.get('created', ''))
-                    updated = self._format_date(payload.get('updated', ''))
+                    # Construction d'un bloc de texte basique qui fonctionne pour tout type de source
+                    basic_text = f"*{source_type.upper()}* - {fiabilite} {score_percent}%\n"
 
-                    basic_text += (
-                        f"*ID:* {id_field} - *Client:* {client}\n"
-                        f"*Titre:* {title}\n"
-                        f"*Status:* {status} - *Assigné à:* {assignee}\n"
-                        f"*Créé le:* {created} - *Maj:* {updated}\n"
-                        f"*Description:* {content}\n"
-                        f"*URL:* {payload.get('url', 'N/A')}"
-                    )
-                elif source_type in ['confluence']:
-                    space_id = payload.get('space_id', 'N/A')
-                    client = payload.get('client', 'N/A')
+                    if source_type in ['jira', 'zendesk']:
+                        id_field = payload.get('key', '') or payload.get('ticket_id', '') or payload.get('id', '')
+                        client = payload.get('client', 'N/A')
+                        status = payload.get('resolution', '') or payload.get('status', 'En cours')
+                        assignee = payload.get('assignee', 'Non assigné')
+                        created = self._format_date(payload.get('created', ''))
+                        updated = self._format_date(payload.get('updated', ''))
 
-                    basic_text += (
-                        f"*Espace:* {space_id} - *Client:* {client}\n"
-                        f"*Titre:* {title}\n"
-                        f"*Contenu:* {content}\n"
-                        f"*URL:* {payload.get('page_url', 'N/A')}"
-                    )
-                elif source_type in ['netsuite', 'netsuite_dummies', 'sap']:
-                    # Format pour les sources ERP
-                    basic_text += (
-                        f"*Titre:* {title}\n"
-                        f"*Contenu:* {content}\n"
-                    )
+                        basic_text += (
+                            f"*ID:* {id_field} - *Client:* {client}\n"
+                            f"*Titre:* {title}\n"
+                            f"*Status:* {status} - *Assigné à:* {assignee}\n"
+                            f"*Créé le:* {created} - *Maj:* {updated}\n"
+                            f"*Description:* {content}\n"
+                            f"*URL:* {payload.get('url', 'N/A')}"
+                        )
+                    elif source_type in ['confluence']:
+                        space_id = payload.get('space_id', 'N/A')
+                        client = payload.get('client', 'N/A')
 
-                    # Ajout de l'URL ou du chemin de fichier selon disponibilité
-                    if payload.get('url'):
-                        basic_text += f"\n*URL:* {payload.get('url')}"
-                    elif payload.get('pdf_path'):
-                        basic_text += f"\n*Document:* {payload.get('pdf_path')}"
-                else:
-                    # Format générique pour tout autre type de source
-                    basic_text += (
-                        f"*Titre:* {title}\n"
-                        f"*Contenu:* {content}"
-                    )
+                        basic_text += (
+                            f"*Espace:* {space_id} - *Client:* {client}\n"
+                            f"*Titre:* {title}\n"
+                            f"*Contenu:* {content}\n"
+                            f"*URL:* {payload.get('page_url', 'N/A')}"
+                        )
+                    elif source_type in ['netsuite', 'netsuite_dummies', 'sap']:
+                        # Format pour les sources ERP
+                        basic_text += (
+                            f"*Titre:* {title}\n"
+                            f"*Contenu:* {content}\n"
+                        )
 
-                # Création du bloc Slack
-                block = {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": basic_text
-                    }
-                }
+                        # Ajout de l'URL ou du chemin de fichier selon disponibilité
+                        if payload.get('url'):
+                            basic_text += f"\n*URL:* {payload.get('url')}"
+                        elif payload.get('pdf_path'):
+                            basic_text += f"\n*Document:* {payload.get('pdf_path')}"
+                    else:
+                        # Format générique pour tout autre type de source
+                        basic_text += (
+                            f"*Titre:* {title}\n"
+                            f"*Contenu:* {content}"
+                        )
 
-                formatted_blocks.append(block)
-
-                # Ajout des boutons d'action si demandé
-                if include_actions:
-                    # Récupération des informations du résultat
-                    result_id = f"{source_type}-{payload.get('id') or payload.get('key') or payload.get('ticket_id', '')}"
-
-                    action_elements = []
-
-                    # Bouton de détails pour les URLs
-                    url = payload.get('url') or payload.get('page_url')
-                    if url:
-                        action_elements.append({
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "Voir détails",
-                                "emoji": True
-                            },
-                            "url": url,
-                            "value": f"view:{result_id}"
-                        })
-
-                    # Autres boutons communs
-                    action_elements.extend([
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "Copier",
-                                "emoji": True
-                            },
-                            "value": f"copy:{result_id}"
-                        },
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "Pertinent",
-                                "emoji": True
-                            },
-                            "value": f"relevant:{result_id}"
+                    # Création du bloc Slack
+                    basic_block = {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": basic_text
                         }
-                    ])
-
-                    # Ajout du bloc d'actions
-                    if action_elements:
-                        formatted_blocks.append({
-                            "type": "actions",
-                            "elements": action_elements
-                        })
-
-                # Ajout d'un séparateur
-                formatted_blocks.append({"type": "divider"})
-
-            except Exception as e:
-                self.logger.error(f"Erreur formatage résultat: {str(e)}")
-                # En cas d'erreur, on ajoute un bloc d'erreur
-                formatted_blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": "Erreur de formatage pour un résultat"
                     }
-                })
+
+                    formatted_blocks.append(basic_block)
+
+                    # Ajout des boutons d'action si demandé
+                    if include_actions:
+                        # Récupération des informations du résultat
+                        result_id = f"{source_type}-{payload.get('id') or payload.get('key') or payload.get('ticket_id', '')}"
+
+                        action_elements = []
+
+                        # Bouton de détails pour les URLs
+                        url = payload.get('url') or payload.get('page_url')
+                        if url:
+                            action_elements.append({
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "Voir détails",
+                                    "emoji": True
+                                },
+                                "url": url,
+                                "value": f"view:{result_id}"
+                            })
+
+                        # Autres boutons communs
+                        action_elements.extend([
+                            {
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "Copier",
+                                    "emoji": True
+                                },
+                                "value": f"copy:{result_id}"
+                            },
+                            {
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "Pertinent",
+                                    "emoji": True
+                                },
+                                "value": f"relevant:{result_id}"
+                            }
+                        ])
+
+                        # Ajout du bloc d'actions
+                        if action_elements:
+                            formatted_blocks.append({
+                                "type": "actions",
+                                "elements": action_elements
+                            })
+
+                    # Ajout d'un séparateur
+                    formatted_blocks.append({"type": "divider"})
+                    
+                except Exception as e:
+                    self.logger.error(f"Erreur formatage résultat #{i+1}: {str(e)}")
+                    # En cas d'erreur, on ajoute un bloc d'erreur
+                    formatted_blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"Erreur de formatage pour le résultat #{i+1}"
+                        }
+                    })
+                    formatted_blocks.append({"type": "divider"})
+        else:
+            # Formatage de chaque résultat en utilisant les clients de recherche (code original)
+            for r in results:
+                try:
+                    # Extraction du payload et du score
+                    if isinstance(r, dict):
+                        payload = r.get('payload', {})
+                        score = float(r.get('score', 0.0))
+                    else:
+                        payload = r.payload if isinstance(r.payload, dict) else getattr(r.payload, '__dict__', {})
+                        score = float(getattr(r, 'score', 0.0))
+
+                    # Détection de la source
+                    source_type = self._detect_source_type(r)
+                    
+                    # Formatage via client spécialisé si disponible
+                    if source_type in source_clients:
+                        source_client = source_clients[source_type]
+                        formatted_block = await source_client.format_for_slack(r)
+                        if formatted_block and isinstance(formatted_block, dict) and formatted_block.get("type"):
+                            formatted_blocks.append(formatted_block)
+                            formatted_blocks.append({"type": "divider"})
+                            continue
+                        else:
+                            # Log et continue avec le prochain résultat sans utiliser le formatage par défaut
+                            current_source_type = self._detect_source_type(r)
+                            self.logger.warning(f"Bloc formaté invalide pour {current_source_type}")
+                        
+                    # Sinon, fallback au formatage de base (code original conservé)
+                    score_percent = round(score * 100)
+                    fiabilite = "🟢" if score_percent > 80 else "🟡" if score_percent > 60 else "🔴"
+
+                    # Extraction des champs communs avec fallbacks
+                    title = payload.get('summary', '') or payload.get('title', '') or "Sans titre"
+                    content = str(payload.get('content', '') or payload.get('text', '') or "Pas de contenu")
+                    if len(content) > 500:
+                        content = content[:497] + "..."
+
+                    # Construction d'un bloc de texte basique qui fonctionne pour tout type de source
+                    basic_text = f"*{source_type.upper()}* - {fiabilite} {score_percent}%\n"
+
+                    if source_type in ['jira', 'zendesk']:
+                        id_field = payload.get('key', '') or payload.get('ticket_id', '') or payload.get('id', '')
+                        client = payload.get('client', 'N/A')
+                        status = payload.get('resolution', '') or payload.get('status', 'En cours')
+                        assignee = payload.get('assignee', 'Non assigné')
+                        created = self._format_date(payload.get('created', ''))
+                        updated = self._format_date(payload.get('updated', ''))
+
+                        basic_text += (
+                            f"*ID:* {id_field} - *Client:* {client}\n"
+                            f"*Titre:* {title}\n"
+                            f"*Status:* {status} - *Assigné à:* {assignee}\n"
+                            f"*Créé le:* {created} - *Maj:* {updated}\n"
+                            f"*Description:* {content}\n"
+                            f"*URL:* {payload.get('url', 'N/A')}"
+                        )
+                    elif source_type in ['confluence']:
+                        space_id = payload.get('space_id', 'N/A')
+                        client = payload.get('client', 'N/A')
+
+                        basic_text += (
+                            f"*Espace:* {space_id} - *Client:* {client}\n"
+                            f"*Titre:* {title}\n"
+                            f"*Contenu:* {content}\n"
+                            f"*URL:* {payload.get('page_url', 'N/A')}"
+                        )
+                    elif source_type in ['netsuite', 'netsuite_dummies', 'sap']:
+                        # Format pour les sources ERP
+                        basic_text += (
+                            f"*Titre:* {title}\n"
+                            f"*Contenu:* {content}\n"
+                        )
+
+                        # Ajout de l'URL ou du chemin de fichier selon disponibilité
+                        if payload.get('url'):
+                            basic_text += f"\n*URL:* {payload.get('url')}"
+                        elif payload.get('pdf_path'):
+                            basic_text += f"\n*Document:* {payload.get('pdf_path')}"
+                    else:
+                        # Format générique pour tout autre type de source
+                        basic_text += (
+                            f"*Titre:* {title}\n"
+                            f"*Contenu:* {content}"
+                        )
+
+                    # Création du bloc Slack
+                    block = {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": basic_text
+                        }
+                    }
+
+                    formatted_blocks.append(block)
+
+                    # Ajout des boutons d'action si demandé
+                    if include_actions:
+                        # Récupération des informations du résultat
+                        result_id = f"{source_type}-{payload.get('id') or payload.get('key') or payload.get('ticket_id', '')}"
+
+                        action_elements = []
+
+                        # Bouton de détails pour les URLs
+                        url = payload.get('url') or payload.get('page_url')
+                        if url:
+                            action_elements.append({
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "Voir détails",
+                                    "emoji": True
+                                },
+                                "url": url,
+                                "value": f"view:{result_id}"
+                            })
+
+                        # Autres boutons communs
+                        action_elements.extend([
+                            {
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "Copier",
+                                    "emoji": True
+                                },
+                                "value": f"copy:{result_id}"
+                            },
+                            {
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "Pertinent",
+                                    "emoji": True
+                                },
+                                "value": f"relevant:{result_id}"
+                            }
+                        ])
+
+                        # Ajout du bloc d'actions
+                        if action_elements:
+                            formatted_blocks.append({
+                                "type": "actions",
+                                "elements": action_elements
+                            })
+
+                    # Ajout d'un séparateur
+                    formatted_blocks.append({"type": "divider"})
+
+                except Exception as e:
+                    self.logger.error(f"Erreur formatage résultat: {str(e)}")
+                    # En cas d'erreur, on ajoute un bloc d'erreur
+                    formatted_blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "Erreur de formatage pour un résultat"
+                        }
+                    })
 
         # Si aucun résultat formaté
         if not formatted_blocks:
@@ -923,7 +1119,23 @@ class ChatBot:
             self.logger.error(f"Erreur génération résumé: {str(e)}")
             return "Erreur lors de la génération du résumé."
     
-    async def process_web_message(self, text: str, conversation: Any, user_id: str, mode: str = "detail") -> Dict:
+    async def process_web_message(self, text: str, conversation: Any, user_id: str, mode: str = "detail", 
+                                  debug_zendesk: bool = False, progressive: bool = False, timeout: int = 30):
+        """
+        Traite un message reçu de l'interface web.
+        
+        Args:
+            text: Message à traiter
+            conversation: Objet de conversation pour la persistence
+            user_id: Identifiant de l'utilisateur
+            mode: Mode de réponse ('detail' ou 'summary')
+            debug_zendesk: Activer le mode débogage pour les résultats Zendesk
+            progressive: Activer le formatage progressif des résultats
+            timeout: Délai maximum d'attente en secondes
+            
+        Returns:
+            Réponse formatée pour l'interface web
+        """
         start_time = time.monotonic()
         try:
             # Si c'est une commande spéciale, traitement approprié
@@ -942,7 +1154,7 @@ class ChatBot:
 
             # Timeout global pour limiter le temps de traitement
             try:
-                async with asyncio.timeout(120):  # Augmenté à 120 secondes pour le traitement complet
+                async with asyncio.timeout(timeout):  # Utilisation du timeout spécifié
                     # Analyse de la question pour déterminer le contexte et la stratégie
                     analysis = await asyncio.wait_for(self.analyze_question(text), timeout=60)  # Augmenté à 60 secondes
 
@@ -1024,7 +1236,12 @@ class ChatBot:
                     # Choix du format selon le mode transmis
                     if mode == "detail":
                         # Retourner directement les résultats détaillés
-                        detailed_response = await self.format_response(resultats, text)
+                        detailed_response = await self.format_response(
+                            resultats, 
+                            text, 
+                            debug_zendesk=debug_zendesk, 
+                            progressive=progressive
+                        )
                         return detailed_response
                     else:
                         # Pour le mode guide, générer un résumé avec boutons d'action
@@ -1068,7 +1285,8 @@ class ChatBot:
 
             
    
-    async def handle_action_button(self, action_type: str, action_value: str, conversation: Any, user_id: str) -> Dict:
+    async def handle_action_button(self, action_type: str, action_value: str, conversation: Any, user_id: str,
+                                  debug_zendesk: bool = False, progressive: bool = False):
         """
         Gère les actions des boutons cliqués par l'utilisateur.
         
@@ -1077,6 +1295,8 @@ class ChatBot:
             action_value: Valeur associée (généralement la question originale)
             conversation: Contexte de conversation
             user_id: Identifiant de l'utilisateur
+            debug_zendesk: Activer le mode débogage pour les résultats Zendesk
+            progressive: Activer le formatage progressif des résultats
             
         Returns:
             Réponse formatée selon l'action demandée
@@ -1098,7 +1318,9 @@ class ChatBot:
             
             if action_type == "details":
                 # Afficher les détails des résultats
-                detailed_response = await self.format_response(last_results, action_value)
+                detailed_response = await self.format_response(last_results, action_value, 
+                                                              debug_zendesk=debug_zendesk, 
+                                                              progressive=progressive)
                 return detailed_response
                 
             elif action_type == "guide":
