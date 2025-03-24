@@ -3,14 +3,18 @@
 import asyncio
 import hashlib
 import logging
-import time
-from typing import Dict, Optional, List, Set
-from configuration import logger, global_cache
+import re  # Utilisé pour les expressions régulières dans le code
+from typing import List
+from configuration import global_cache
 
 class TranslationService:
     """
     Service centralisé de traduction avec cache optimisé et détection de langue.
     """
+    
+    # Constantes pour la détection de langue
+    COMMON_FRENCH_WORDS = {'le', 'la', 'les', 'un', 'une', 'des', 'et', 'ou', 'je', 'tu', 'il', 'elle'}
+    COMMON_ENGLISH_WORDS = {'the', 'a', 'an', 'and', 'or', 'i', 'you', 'he', 'she', 'it', 'they'}
     
     def __init__(self, openai_client, cache=None):
         self.openai_client = openai_client
@@ -18,7 +22,6 @@ class TranslationService:
         self.cache = cache or global_cache
         self.logger = logging.getLogger('ITS_HELP.translation')
         self.namespace = "translations"
-        self.common_languages = {"fr", "en", "de", "es", "it"}
         self.max_retries = 2
         self.retry_delay = 1
         self.batch_size = 5  # Nombre de textes à traduire en batch
@@ -45,12 +48,9 @@ class TranslationService:
         try:
             # Si texte court, utilisation de règles simples
             if len(text) < 20:
-                common_french = {'le', 'la', 'les', 'un', 'une', 'des', 'et', 'ou', 'je', 'tu', 'il', 'elle'}
-                common_english = {'the', 'a', 'an', 'and', 'or', 'i', 'you', 'he', 'she', 'it', 'they'}
-                
                 words = set(text.lower().split())
-                fr_matches = len(words.intersection(common_french))
-                en_matches = len(words.intersection(common_english))
+                fr_matches = len(words.intersection(self.COMMON_FRENCH_WORDS))
+                en_matches = len(words.intersection(self.COMMON_ENGLISH_WORDS))
                 
                 if fr_matches > en_matches:
                     await self.cache.set(cache_key, "fr", self.namespace)
@@ -87,13 +87,23 @@ class TranslationService:
             self.logger.error(f"Erreur détection langue: {str(e)}")
             return "fr"  # Fallback en cas d'erreur
     
-    async def translate_sync(self, text: str, target_lang: str = "fr", source_lang: str = None) -> str:
+    async def _prepare_translation(self, text: str, target_lang: str, source_lang: str = None):
         """
-        Version synchrone de la traduction pour les contextes non-async.
-        Utilise le client OpenAI synchrone.
+        Prépare la traduction en effectuant les vérifications préliminaires et la gestion du cache.
+        
+        Args:
+            text: Texte à traduire
+            target_lang: Langue cible
+            source_lang: Langue source (auto-détectée si non spécifiée)
+            
+        Returns:
+            Tuple (text, source_lang, target_lang, cache_key, cached_result)
+            Si cached_result n'est pas None, il contient la traduction mise en cache
+            Si un des trois premiers retours est None, cela indique qu'aucune traduction n'est nécessaire
         """
+        # Si texte trop court, pas de traduction
         if not text or len(text.strip()) < 3:
-            return text
+            return (text, None, None, None, text)
             
         # Détection de la langue source si non spécifiée
         if not source_lang:
@@ -101,19 +111,34 @@ class TranslationService:
             
         # Si déjà dans la langue cible, pas besoin de traduire
         if source_lang == target_lang:
-            return text
+            return (text, None, None, None, text)
             
         # Vérification cache
         cache_key = self._get_cache_key(text, source_lang, target_lang)
         cached = await self.cache.get(cache_key, self.namespace)
         if cached:
+            return (text, source_lang, target_lang, cache_key, cached)
+            
+        # Tout est prêt pour la traduction
+        return (text, source_lang, target_lang, cache_key, None)
+        
+    async def translate_sync(self, text: str, target_lang: str = "fr", source_lang: str = None) -> str:
+        """
+        Version synchrone de la traduction pour les contextes non-async.
+        Utilise le client OpenAI synchrone.
+        """
+        # Préparation de la traduction
+        text, src_lang, tgt_lang, cache_key, cached = await self._prepare_translation(text, target_lang, source_lang)
+        
+        # Si nous avons un résultat de cache ou pas besoin de traduire
+        if cached is not None:
             return cached
             
         try:
             response = self.openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": f"Traduis ce texte de {source_lang} vers {target_lang}. Ne fais aucun autre commentaire."},
+                    {"role": "system", "content": f"Traduis ce texte de {src_lang} vers {tgt_lang}. Ne fais aucun autre commentaire."},
                     {"role": "user", "content": text}
                 ],
                 temperature=0.1
@@ -139,21 +164,11 @@ class TranslationService:
         Returns:
             Texte traduit ou texte original en cas d'erreur
         """
-        if not text or len(text.strip()) < 3:
-            return text
-            
-        # Détection de la langue source si non spécifiée
-        if not source_lang:
-            source_lang = await self.detect_language(text)
-            
-        # Si déjà dans la langue cible, pas besoin de traduire
-        if source_lang == target_lang:
-            return text
-            
-        # Vérification cache
-        cache_key = self._get_cache_key(text, source_lang, target_lang)
-        cached = await self.cache.get(cache_key, self.namespace)
-        if cached:
+        # Préparation de la traduction
+        text, src_lang, tgt_lang, cache_key, cached = await self._prepare_translation(text, target_lang, source_lang)
+        
+        # Si nous avons un résultat de cache ou pas besoin de traduire
+        if cached is not None:
             return cached
             
         # Si pas de client async, utiliser la version sync
@@ -162,7 +177,7 @@ class TranslationService:
             
         try:
             # Essayer d'ajouter à une requête en batch existante
-            request_key = f"{source_lang}:{target_lang}"
+            request_key = f"{src_lang}:{tgt_lang}"
             
             async with self._lock:
                 if request_key in self._pending_requests:
@@ -193,7 +208,7 @@ class TranslationService:
                     response = await self.openai_async.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
-                            {"role": "system", "content": f"Traduis ce texte de {source_lang} vers {target_lang}. Ne fais aucun autre commentaire."},
+                            {"role": "system", "content": f"Traduis ce texte de {src_lang} vers {tgt_lang}. Ne fais aucun autre commentaire."},
                             {"role": "user", "content": text}
                         ],
                         temperature=0.1
@@ -265,7 +280,6 @@ class TranslationService:
             
             for line in result.split("\n"):
                 # Recherche d'un nouvel index [N]
-                import re
                 match = re.match(r'\[(\d+)\](.*)', line)
                 
                 if match:
@@ -380,7 +394,6 @@ class TranslationService:
             
             for line in result.split("\n"):
                 # Recherche d'un nouvel index [N]
-                import re
                 match = re.match(r'\[(\d+)\](.*)', line)
                 
                 if match:

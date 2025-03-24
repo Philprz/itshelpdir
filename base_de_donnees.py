@@ -12,7 +12,7 @@ import sqlite3
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Any
+from typing import List, Optional, Any
 
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, JSON, inspect,
@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 
-from configuration import config, logger
+from configuration import logger
 
 
 def normalize_string(s: str) -> str:

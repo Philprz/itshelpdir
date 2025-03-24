@@ -1,9 +1,5 @@
-from typing import Dict, List, Optional, Any
-from datetime import datetime
-import hashlib
-
+from typing import Dict, Optional, Any
 from search_base import AbstractSearchClient, SearchResultProcessor
-from translation_service import TranslationService
 from configuration import logger
 
 

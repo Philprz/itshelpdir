@@ -18,8 +18,12 @@ logging.basicConfig(level=logging.DEBUG,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('test_chatbot')
 
-# Maintenant seulement, on importe le ChatBot
-from chatbot import ChatBot  # Import non situé en haut du fichier, mais nécessaire après le chargement des variables d'environnement
+# NOTE: L'import suivant est intentionnellement placé ici et non en haut du fichier.
+# Cette dérogation aux conventions PEP8 est nécessaire car le ChatBot a besoin 
+# des variables d'environnement chargées ci-dessus pour fonctionner correctement.
+# Sans ce chargement préalable, les clés API et configurations ne seraient pas accessibles.
+# noqa: E402  # Désactive l'avertissement de linter pour l'import non situé en haut du fichier
+from chatbot import ChatBot  # Import non situé en haut du fichier, mais nécessaire après le chargement des variables d'environnement  # noqa: E402
 
 async def test_chatbot():
     """Fonction de test pour le chatbot"""

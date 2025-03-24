@@ -4,10 +4,9 @@ from abc import ABC, abstractmethod
 import asyncio
 import hashlib
 import logging
-import time
-from typing import Dict, List, Optional, Any, Tuple, Union
+from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
-from configuration import logger, global_cache
+from configuration import logger
 from embedding_service import EmbeddingService
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, Range

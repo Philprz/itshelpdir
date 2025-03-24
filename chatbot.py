@@ -7,14 +7,13 @@ import asyncio
 import logging
 import hashlib
 import time
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Any
 from openai import AsyncOpenAI
 
 from search_factory import search_factory
 from gestion_clients import extract_client_name
-from base_de_donnees import SessionLocal, Conversation
-from configuration import logger, global_cache
+from base_de_donnees import global_cache
 from embedding_service import EmbeddingService
 from translation_service import TranslationService
 
@@ -148,14 +147,14 @@ class ChatBot:
             search_context = {}
             # Modifié pour mieux détecter une référence client
             if search_context.get("has_client"):
-                client_name, score, client_details = await extract_client_name(text)
+                client_name, _, _ = await extract_client_name(text)
                 # Ajout d'une recherche spécifique pour les mots simples
                 if not client_name and re.search(r'\b[A-Za-z]{4,}\b', text):
                     potential_clients = re.findall(r'\b[A-Za-z]{4,}\b', text)
                     for potential in potential_clients:
-                        test_name, test_score, test_details = await extract_client_name(potential)
+                        test_name, _, _ = await extract_client_name(potential)
                         if test_name:
-                            client_name, score, client_details = test_name, test_score, test_details
+                            client_name = test_name
                             break
             # Détection rapide des catégories
             is_config_request = any(k in text.lower() for k in ['configur', 'paramèt', 'workflow', 'personnalis', 'custom'])
@@ -252,26 +251,31 @@ class ChatBot:
             # Nettoyage pour extraire uniquement le JSON
             content = re.sub(r'^[^{]*({.*})[^}]*$', r'\1', content.strip(), flags=re.DOTALL)
             return json.loads(content)
-        except:
+        except Exception as e:
+            self.logger.warning(f"Erreur lors du parsing JSON de l'analyse: {str(e)}")
             return None
     
     def determine_collections(self, analysis: Dict) -> List[str]:
         """Détermine les collections à interroger selon l'analyse."""
+        # Mapping des types de requêtes vers les collections appropriées
+        collection_mapping = {
+            'configuration': ['netsuite', 'netsuite_dummies', 'sap'],
+            'support': ['jira', 'zendesk', 'confluence'],
+            'documentation': ['confluence', 'netsuite', 'netsuite_dummies']
+        }
+        
         # Utilisation directe des sources prioritaires si définies
         if "search_strategy" in analysis and "priority_sources" in analysis["search_strategy"]:
             return analysis["search_strategy"]["priority_sources"]
             
-        # Sinon, détermination selon le type de requête
+        # Vérification spécifique pour les tickets
         if "tickets" in analysis.get('query', {}).get('original','').lower():
-            return ['jira','zendesk','confluence']
+            return ['jira', 'zendesk', 'confluence']
             
-        t = (analysis.get('type','') or '').lower()
-        if t == 'configuration':
-            return ['netsuite','netsuite_dummies','sap']
-        elif t == 'support':
-            return ['jira','zendesk','confluence']
-        elif t == 'documentation':
-            return ['confluence','netsuite','netsuite_dummies']
+        # Détermination selon le type de requête
+        query_type = (analysis.get('type','') or '').lower()
+        if query_type in collection_mapping:
+            return collection_mapping[query_type]
             
         # Par défaut, retourner toutes les collections
         return list(self.collections.keys())
@@ -393,7 +397,7 @@ class ChatBot:
             if not hasattr(res, 'payload'):
                 continue
 
-            # Extraction sécurisée du contenu
+            # Extraction des champs communs avec fallbacks
             try:
                 if isinstance(res.payload, dict):
                     payload = res.payload
@@ -446,7 +450,7 @@ class ChatBot:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "🔍 *Aucun résultat pertinent trouvé*"
+                    "text": "Aucun résultat pertinent trouvé"
                 }
             }]
 
@@ -651,7 +655,7 @@ class ChatBot:
                             "type": "button",
                             "text": {
                                 "type": "plain_text",
-                                "text": "🔍 Voir détails",
+                                "text": "Voir détails",
                                 "emoji": True
                             },
                             "url": url,
@@ -664,7 +668,7 @@ class ChatBot:
                             "type": "button",
                             "text": {
                                 "type": "plain_text",
-                                "text": "📋 Copier",
+                                "text": "Copier",
                                 "emoji": True
                             },
                             "value": f"copy:{result_id}"
@@ -673,7 +677,7 @@ class ChatBot:
                             "type": "button",
                             "text": {
                                 "type": "plain_text",
-                                "text": "👍 Pertinent",
+                                "text": "Pertinent",
                                 "emoji": True
                             },
                             "value": f"relevant:{result_id}"
@@ -697,7 +701,7 @@ class ChatBot:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"⚠️ *Erreur de formatage pour un résultat*"
+                        "text": "Erreur de formatage pour un résultat"
                     }
                 })
 
@@ -745,7 +749,7 @@ class ChatBot:
         self.logger.info(f"Réponse formatée avec {len(all_blocks)} blocs")
 
         return {
-            "text": f"Résultats pour: {question}" if question else "Résultats de recherche",
+            "text": "Résultats pour: " + question if question else "Résultats de recherche",
             "blocks": all_blocks
         }
 
@@ -764,7 +768,8 @@ class ChatBot:
                 except ValueError:
                     return date_value[:10] if date_value else 'N/A'
             return 'N/A'
-        except Exception:
+        except Exception as e:
+            self.logger.error(f"Erreur formatage date: {str(e)}")
             return 'N/A'
 
     
@@ -779,9 +784,12 @@ class ChatBot:
                 return p['source_type']
                 
             # Détection basée sur les champs présents
-            if 'key' in p: return 'jira'
-            if 'ticket_id' in p: return 'zendesk'
-            if 'space_id' in p: return 'confluence'
+            if 'key' in p: 
+                return 'jira'
+            if 'ticket_id' in p: 
+                return 'zendesk'
+            if 'space_id' in p: 
+                return 'confluence'
             if 'pdf_path' in p:
                 return 'netsuite_dummies' if 'dummy' in str(p.get('title','')).lower() else 'sap'
             if 'url' in p and 'content' in p:
@@ -925,7 +933,7 @@ class ChatBot:
             # Vérification si salutation
             if await self.is_greeting(text):
                 return {
-                    "text": f"Bonjour, comment puis-je vous aider ?",
+                    "text": "Bonjour, comment puis-je vous aider ?",
                     "blocks": [{
                         "type": "section",
                         "text": {"type": "mrkdwn", "text": "Bonjour, comment puis-je vous aider ?"}
@@ -951,23 +959,22 @@ class ChatBot:
                     client_info = None
                     search_context = analysis.get("search_context", {})
                     if search_context.get("has_client"):
-                        client_name, score, client_details = await extract_client_name(text)
-                        if client_details and client_details.get("ambiguous"):
-                            possibilities = client_details.get("possibilities", [])
-                            return {
-                                "text": f"Plusieurs clients possibles : {', '.join(possibilities)}. Pouvez-vous préciser ?",
-                                "blocks": [{
-                                    "type": "section",
-                                    "text": {"type": "mrkdwn", "text": f"Plusieurs clients possibles : {', '.join(possibilities)}. Pouvez-vous préciser ?"}
-                                }]
-                            }
+                        client_name, _, _ = await extract_client_name(text)
+                        # Ajout d'une recherche spécifique pour les mots simples
+                        if not client_name and re.search(r'\b[A-Za-z]{4,}\b', text):
+                            potential_clients = re.findall(r'\b[A-Za-z]{4,}\b', text)
+                            for potential in potential_clients:
+                                test_name, _, _ = await extract_client_name(potential)
+                                if test_name:
+                                    client_name = test_name
+                                    break
                         if client_name:
                             client_info = {"source": client_name, "jira": client_name, "zendesk": client_name}
                             self.logger.info(f"Client trouvé: {client_name}")
 
                     # Tentative d'extraction directe du client si non trouvé par l'analyse
                     if not client_info:
-                        client_name, score, client_details = await extract_client_name(text)
+                        client_name, _, _ = await extract_client_name(text)
                         if client_name:
                             client_info = {"source": client_name, "jira": client_name, "zendesk": client_name}
                             self.logger.info(f"Client trouvé (méthode directe): {client_name}")
@@ -981,14 +988,16 @@ class ChatBot:
                     if temporal_info.get("start_timestamp"):
                         try:
                             date_debut = datetime.fromtimestamp(temporal_info["start_timestamp"], tz=timezone.utc)
-                        except:
+                        except ValueError as e:
+                            self.logger.debug(f"Erreur lors du traitement de date_debut: {str(e)}")
                             pass
 
                     if temporal_info.get("end_timestamp"):
                         try:
                             date_fin = datetime.fromtimestamp(temporal_info["end_timestamp"], tz=timezone.utc)
                             date_fin = date_fin.replace(hour=23, minute=59, second=59, microsecond=999999)
-                        except:
+                        except ValueError as e:
+                            self.logger.debug(f"Erreur lors du traitement de date_fin: {str(e)}")
                             pass
 
                     # Détermination des collections à utiliser
@@ -1023,14 +1032,14 @@ class ChatBot:
                         action_buttons = { 
                             "type": "actions",
                             "elements": [
-                                {"type": "button", "text": {"type": "plain_text", "text": "🔍 Détails", "emoji": True}, "value": f"details:{text}"},
-                                {"type": "button", "text": {"type": "plain_text", "text": "📋 Guide", "emoji": True}, "value": f"guide:{text}"}
+                                {"type": "button", "text": {"type": "plain_text", "text": "Détails", "emoji": True}, "value": f"details:{text}"},
+                                {"type": "button", "text": {"type": "plain_text", "text": "Guide", "emoji": True}, "value": f"guide:{text}"}
                             ]
                         }
                         return {
                             "text": summary,
                             "blocks": [
-                                {"type": "section", "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}},
+                                {"type": "section", "text": {"type": "mrkdwn", "text": f"Résumé\n\n{summary}"}},
                                 action_buttons
                             ]
                         }
@@ -1079,7 +1088,7 @@ class ChatBot:
                     "text": "Action non valide: paramètres manquants",
                     "blocks": [{
                         "type": "section", 
-                        "text": {"type": "mrkdwn", "text": "❌ Action non valide: paramètres manquants"}
+                        "text": {"type": "mrkdwn", "text": "Action non valide: paramètres manquants"}
                     }]
                 }
                 
@@ -1099,7 +1108,7 @@ class ChatBot:
                     "text": guide,
                     "blocks": [{
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"🔍 *Guide étape par étape*\n\n{guide}"}
+                        "text": {"type": "mrkdwn", "text": f"Guide étape par étape\n\n{guide}"}
                     }]
                 }
                 
@@ -1111,15 +1120,15 @@ class ChatBot:
                 action_buttons = {
                     "type": "actions",
                     "elements": [
-                        {"type": "button", "text": {"type": "plain_text", "text": "🔍 Détails", "emoji": True}, "value": f"details:{action_value}"},
-                        {"type": "button", "text": {"type": "plain_text", "text": "📋 Guide", "emoji": True}, "value": f"guide:{action_value}"}
+                        {"type": "button", "text": {"type": "plain_text", "text": "Détails", "emoji": True}, "value": f"details:{action_value}"},
+                        {"type": "button", "text": {"type": "plain_text", "text": "Guide", "emoji": True}, "value": f"guide:{action_value}"}
                     ]
                 }
                 
                 return {
                     "text": summary,
                     "blocks": [
-                        {"type": "section", "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}},
+                        {"type": "section", "text": {"type": "mrkdwn", "text": f"Résumé\n\n{summary}"}},
                         action_buttons
                     ]
                 }
@@ -1129,7 +1138,7 @@ class ChatBot:
                     "text": f"Action non reconnue: {action_type}",
                     "blocks": [{
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"❓ Action non reconnue: {action_type}"}
+                        "text": {"type": "mrkdwn", "text": f"Action non reconnue: {action_type}"}
                     }]
                 }
                 
@@ -1139,7 +1148,7 @@ class ChatBot:
                 "text": f"Erreur lors du traitement de l'action: {str(e)}",
                 "blocks": [{
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"❌ Erreur lors du traitement de l'action: {str(e)}"}
+                    "text": {"type": "mrkdwn", "text": f"Erreur lors du traitement de l'action: {str(e)}"}
                 }]
             }
     async def _process_command(self, command: str, conversation: Any, user_id: str) -> Dict:    
@@ -1183,15 +1192,16 @@ class ChatBot:
                     "text": "Contexte de conversation effacé.",
                     "blocks": [{
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": "✅ Contexte de conversation effacé."}
+                        "text": {"type": "mrkdwn", "text": "Contexte de conversation effacé."}
                     }]
                 }
-            except:
+            except Exception as e:
+                self.logger.error(f"Erreur lors de l'effacement du contexte: {str(e)}")
                 return {
                     "text": "Erreur lors de l'effacement du contexte.",
                     "blocks": [{
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": "❌ Erreur lors de l'effacement du contexte."}
+                        "text": {"type": "mrkdwn", "text": "Erreur lors de l'effacement du contexte."}
                     }]
                 }
                 
@@ -1207,21 +1217,22 @@ class ChatBot:
                 collection_info = {c.name: c.points_count for c in collections.collections}
                 
                 # Vérifier la connectivité OpenAI
-                openai_status = "✅ Connecté"
+                openai_status = "Connecté"
                 try:
                     await self.openai_client.models.list()
-                except:
-                    openai_status = "❌ Erreur de connexion"
+                except Exception as e:
+                    self.logger.error(f"Erreur de connexion OpenAI: {str(e)}")
+                    openai_status = "Erreur de connexion"
                 
                 # Stats du cache
                 cache_stats = await global_cache.get_stats() if hasattr(global_cache, 'get_stats') else {"items": "N/A"}
                 
                 # Formatage du message
-                status_message = f"""
+                status_message = """
                     *État des services ITS Help*
 
-                    *OpenAI:* {openai_status}
-                    *Cache:* {cache_stats.get('items', 'N/A')} éléments
+                    *OpenAI:* """ + openai_status + """
+                    *Cache:* """ + str(cache_stats.get('items', 'N/A')) + """ éléments
 
                     *Collections Qdrant:*
                     """
@@ -1241,7 +1252,7 @@ class ChatBot:
                     "text": f"Erreur lors de la vérification du statut: {str(e)}",
                     "blocks": [{
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"❌ Erreur lors de la vérification du statut: {str(e)}"}
+                        "text": {"type": "mrkdwn", "text": f"Erreur lors de la vérification du statut: {str(e)}"}
                     }]
                 }
                 
@@ -1252,14 +1263,14 @@ class ChatBot:
                 return {
                     "text": "Veuillez spécifier un sujet pour le guide.",
                     "blocks": [{
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": "⚠️ Veuillez spécifier un sujet pour le guide."}
+                        "type": "section", 
+                        "text": {"type": "mrkdwn", "text": "Veuillez spécifier un sujet pour le guide."}
                     }]
                 }
                 
             # Exécution comme une requête normale avec mode guide forcé
             return await self.process_web_message(
-                f"guide étape par étape pour {topic}",
+                "guide étape par étape pour " + topic,
                 conversation,
                 user_id
             )
@@ -1272,18 +1283,18 @@ class ChatBot:
                     "text": "Veuillez spécifier un nom de client.",
                     "blocks": [{
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": "⚠️ Veuillez spécifier un nom de client."}
+                        "text": {"type": "mrkdwn", "text": "Veuillez spécifier un nom de client."}
                     }]
                 }
                 
             # Vérification de l'existence du client
-            client_name, score, client_details = await extract_client_name(client_name)
+            client_name, _, _ = await extract_client_name(client_name)
             if not client_name:
                 return {
                     "text": "Client non trouvé.",
                     "blocks": [{
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": "❌ Client non trouvé dans la base de données."}
+                        "text": {"type": "mrkdwn", "text": "Client non trouvé dans la base de données."}
                     }]
                 }
                 
@@ -1296,7 +1307,7 @@ class ChatBot:
                     "text": f"Client par défaut défini: {client_name}",
                     "blocks": [{
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"✅ Client par défaut défini: *{client_name}*"}
+                        "text": {"type": "mrkdwn", "text": f"Client par défaut défini: *{client_name}*"}
                     }]
                 }
             except Exception as e:
@@ -1304,7 +1315,7 @@ class ChatBot:
                     "text": f"Erreur lors du stockage du client: {str(e)}",
                     "blocks": [{
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"❌ Erreur lors du stockage du client: {str(e)}"}
+                        "text": {"type": "mrkdwn", "text": f"Erreur lors du stockage du client: {str(e)}"}
                     }]
                 }
                 
@@ -1314,6 +1325,6 @@ class ChatBot:
                 "text": "Commande non reconnue.",
                 "blocks": [{
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": "⚠️ Commande non reconnue. Tapez `/help` pour voir les commandes disponibles."}
+                    "text": {"type": "mrkdwn", "text": "Commande non reconnue. Tapez `/help` pour voir les commandes disponibles."}
                 }]
             }

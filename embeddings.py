@@ -1,9 +1,8 @@
 #embeddings.py
 from base_de_donnees import global_cache
-from configuration import config, logger
 import hashlib
 import logging
-from typing import List, Optional, Any, Tuple
+from typing import List, Optional, Tuple
 import asyncio
 class EmbeddingService:
     """Service centralisé de génération d'embeddings avec cache optimisé."""

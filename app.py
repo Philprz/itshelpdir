@@ -1,20 +1,25 @@
+# Imports standards
 import os
 import json
 import asyncio
 import logging
 import time
 import traceback
+import uuid
 from functools import wraps
 from importlib.util import find_spec
-import uuid
 
+# Imports Flask et extensions
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from dotenv import load_dotenv
+
+# Imports pour la gestion des erreurs
 import sqlalchemy.orm.exc as sa_exc
 from openai import OpenAIError
 
+# Imports internes
 from configuration import logger, global_cache
 from base_de_donnees import init_db
 from chatbot import ChatBot

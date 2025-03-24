@@ -111,31 +111,29 @@ def find_free_port(default_port=5000, max_attempts=10):
     """Trouve un port libre pour l'application"""
     logger.info(f"Recherche d'un port libre (port par défaut: {default_port})...")
     
+    def test_port(port):
+        """Teste si un port est disponible"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('0.0.0.0', port))
+                return True
+            except OSError:
+                logger.debug(f"Port {port} déjà utilisé")
+                return False
+    
     # Essayer d'abord le port par défaut
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.bind(('0.0.0.0', default_port))
-        s.close()
+    if test_port(default_port):
         logger.info(f"Le port par défaut {default_port} est disponible")
         return default_port
-    except OSError:
+    else:
         logger.warning(f"Le port {default_port} est déjà utilisé, recherche d'un port alternatif...")
-    finally:
-        s.close()
     
     # Chercher un port libre
     for attempt in range(max_attempts):
         port = default_port + attempt + 1
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            s.bind(('0.0.0.0', port))
-            s.close()
+        if test_port(port):
             logger.info(f"Port alternatif trouvé: {port}")
             return port
-        except OSError:
-            logger.debug(f"Port {port} déjà utilisé")
-        finally:
-            s.close()
     
     logger.error(f"Impossible de trouver un port libre après {max_attempts} tentatives")
     return None

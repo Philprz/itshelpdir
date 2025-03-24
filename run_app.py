@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*- 
 import os 
 import logging 
-from flask import Flask, render_template, request, jsonify 
+from flask import Flask, render_template, jsonify 
 from dotenv import load_dotenv 
  
 logging.basicConfig(level=logging.DEBUG) 
@@ -15,7 +15,7 @@ def index():
  
 @app.route('/api/message', methods=['POST']) 
 def process_message(): 
-    data = request.json 
+    # Le corps de la requête n'est pas utilisé dans cette version simplifiée
     return jsonify({"message": "Ceci est une version de test simplifiee. L'application complete necessite Socket.IO.", "blocks": []}) 
  
 if __name__ == '__main__': 

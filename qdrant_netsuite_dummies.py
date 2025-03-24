@@ -5,17 +5,15 @@ import logging
 import asyncio
 
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue, Range
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai import AsyncOpenAI
 import hashlib
-from hashlib import md5
 from typing import Optional, Dict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from qdrant_jira import BaseQdrantSearch
-from configuration import logger
 from qdrant_netsuite import TranslationMixin
 from base_de_donnees import QdrantSessionManager
 # Niveau de log cohérent :
@@ -178,10 +176,12 @@ class QdrantNetsuiteDummiesSearch(TranslationMixin, SimpleQdrantSearch):
             fiabilite = "🟢" if score > 80 else "🟡" if score > 60 else "🔴"
             
             # Construction du message avec gestion robuste
-            doc_id = payload.get('id', 'N/A')
+            # doc_id est conservé pour compatibilité avec des développements futurs
+            # et pour maintenir la structure de données cohérente avec les autres modules
+            _ = payload.get('id', 'N/A')  # Anciennement doc_id, gardé en commentaire pour référence
             content = str(payload.get('text', 'Pas de contenu'))
             title = payload.get('title', 'Sans titre')
-            pdf_path = f"data/Netsuite_Dummies/NetSuiteForDummies.pdf"
+            pdf_path = "data/Netsuite_Dummies/NetSuiteForDummies.pdf"
             
             # Traduction avec gestion d'erreur
             try:
@@ -224,7 +224,7 @@ class QdrantNetsuiteDummiesSearch(TranslationMixin, SimpleQdrantSearch):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*{source_type.upper()}* - ❌ Erreur de formatage"
+                    "text": "*{}* - ❌ Erreur de formatage".format(source_type.upper())
                 }
             }
 
@@ -374,20 +374,23 @@ class QdrantNetsuiteDummiesSearch(TranslationMixin, SimpleQdrantSearch):
             try:
                 resultats = await self.recherche_intelligente(question)
                 print("\nRésultats trouvés :")
-                if not isinstance(res.payload, dict):  # ou result.payload selon le cas
-                    payload = res.payload.__dict__
-                else:
-                    payload = res.payload
-                for idx, res in enumerate(resultats, 1):
-                    score = round(res.score * 100)
-                    fiabilite = "🟢" if score > 65 else "🟡" if score > 45 else "🔴"
-                    title = await self.traduire_texte(payload['title'], "fr")
-                    text = await self.traduire_texte(payload['text'][:500], "fr")
-                    print(f"\n{idx}. {title} - Pertinence: {fiabilite} {score}%")
-                    print(f"ID: {payload['id']}")
-                    print(f"Contenu: {text}...")
-                    if payload['pdf_path']:
-                        print(f"PDF: {payload['pdf_path']}")
+                if resultats and len(resultats) > 0:
+                    premier_resultat = resultats[0]
+                    if not isinstance(premier_resultat.payload, dict):
+                        payload = premier_resultat.payload.__dict__
+                    else:
+                        payload = premier_resultat.payload
+                        
+                    for idx, res in enumerate(resultats, 1):
+                        score = round(res.score * 100)
+                        fiabilite = "🟢" if score > 65 else "🟡" if score > 45 else "🔴"
+                        title = await self.traduire_texte(payload['title'], "fr")
+                        text = await self.traduire_texte(payload['text'][:500], "fr")
+                        print(f"\n{idx}. {title} - Pertinence: {fiabilite} {score}%")
+                        print(f"ID: {payload['id']}")
+                        print(f"Contenu: {text}...")
+                        if payload['pdf_path']:
+                            print(f"PDF: {payload['pdf_path']}")
                     
             except Exception as e:
                 print(f"Erreur : {str(e)}")

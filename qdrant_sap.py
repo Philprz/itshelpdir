@@ -5,17 +5,15 @@ import logging
 import hashlib
 import asyncio
 
-from hashlib import md5
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue, Range
-from datetime import datetime, timezone, timedelta
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai import AsyncOpenAI
 from typing import Optional, Dict
 
 from qdrant_jira import BaseQdrantSearch
-from configuration import logger
 from qdrant_netsuite import TranslationMixin
 from base_de_donnees import QdrantSessionManager
 class SimpleQdrantSearch(BaseQdrantSearch):
@@ -173,7 +171,8 @@ class QdrantSapSearch(TranslationMixin, SimpleQdrantSearch):
             fiabilite = "🟢" if score > 80 else "🟡" if score > 60 else "🔴"
             
             # Construction du message avec gestion robuste
-            doc_id = payload.get('id', 'N/A')
+            # La variable doc_id n'est pas utilisée mais pourrait être utile pour des développements futurs
+            # doc_id = payload.get('id', 'N/A')
             content = str(payload.get('text', 'Pas de contenu'))
             title = payload.get('title', 'Sans titre')
             # Remplacer l'ancien chemin par le nouveau
@@ -353,7 +352,8 @@ class QdrantSapSearch(TranslationMixin, SimpleQdrantSearch):
                             try:
                                 return sorted([r for r in resultats if hasattr(r, 'score') and r.score >= 0.45], 
                                             key=lambda x: x.score, reverse=True)[:5]
-                            except:
+                            except Exception as e:
+                                self.logger.warning(f"Erreur lors du tri des résultats: {str(e)}")
                                 return []
 
                 except Exception as e:
@@ -373,6 +373,7 @@ class QdrantSapSearch(TranslationMixin, SimpleQdrantSearch):
                 for idx, res in enumerate(resultats, 1):
                     score = round(res.score * 100)
                     fiabilite = "🟢" if score > 65 else "🟡" if score > 45 else "🔴"
+                    
                     if not isinstance(res.payload, dict):  
                         payload = res.payload.__dict__
                     else:

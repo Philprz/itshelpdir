@@ -9,15 +9,13 @@ import threading
 
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, Range
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai import AsyncOpenAI
-from hashlib import md5
 from typing import Optional, Dict, List, Any
 
 from qdrant_jira import BaseQdrantSearch
-from configuration import logger
 from base_de_donnees import QdrantSessionManager
 # Niveau de log cohérent :
 
@@ -274,14 +272,12 @@ class QdrantNetsuiteSearch(TranslationMixin, BaseQdrantSearch):
                 "text": {"type": "mrkdwn", "text": message}
             }
         except Exception as e:
-            self.logger.error(f"Erreur formatage: {str(e)}")
-            # Utiliser le nom de la classe pour déterminer le type de source
-            source_type = self.__class__.__name__.replace("SearchClient", "").lower()
+            self.logger.warning(f"Erreur de formatage pour Slack: {str(e)}")
             return {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*{source_type.upper()}* - ❌ Erreur de formatage"
+                    "text": "🔸 Résultat trouvé - Erreur de formatage"
                 }
             }
 
@@ -357,7 +353,8 @@ class QdrantNetsuiteSearch(TranslationMixin, BaseQdrantSearch):
                     "text": f"🔸 *NETSUITE* - 🔴 Erreur\n{minimal_title}..."
                 }
             }
-        except:
+        except Exception as e:
+            self.logger.error(f"Erreur lors du formatage du résultat NETSUITE: {str(e)}")
             return {
                 "type": "section",
                 "text": {
@@ -406,7 +403,7 @@ class QdrantNetsuiteSearch(TranslationMixin, BaseQdrantSearch):
                 ['configuration', 'paramétrage', 'workflow']) else 15
 
         async with asyncio.timeout(timeout):
-            async with QdrantSessionManager(self.client) as session_manager:
+            async with QdrantSessionManager(self.client) as _:
                 try:
                     # Mise en cache avec clé composite
                     cache_key = hashlib.md5(

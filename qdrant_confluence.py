@@ -1,4 +1,3 @@
-import os
 import re
 import json
 import logging
@@ -7,11 +6,9 @@ import hashlib
 
 from datetime import datetime, timezone
 from typing import Optional, Dict, List, Tuple
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue, Range
 
 from qdrant_jira import BaseQdrantSearch
-from configuration import logger, MAX_SEARCH_RESULTS
-from base_de_donnees import SessionLocal, QdrantSessionManager
+from configuration import MAX_SEARCH_RESULTS
 
 CONFLUENCE_DATE_FORMATS = [
     "%Y-%m-%dT%H:%M:%S.%fZ",  # Format ISO avec microsecondes
@@ -85,7 +82,8 @@ class QdrantConfluenceSearch(DocumentQdrantSearch):
         try:
             dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
             return dt.strftime("%Y-%m-%d")
-        except:
+        except ValueError as e:
+            self.logger.debug(f"Erreur de conversion de date '{date_value}': {str(e)}")
             return date_value[:10] if date_value else 'N/A'
     async def post_traitement_dates(self, resultats, date_debut=None, date_fin=None):
         """Post-traitement des résultats avec gestion des dates."""
@@ -371,7 +369,7 @@ class QdrantConfluenceSearch(DocumentQdrantSearch):
                 return response.data[0].embedding
             except Exception as e:
                 if attempt == max_retries - 1:
-                    self.logger.error(f"Échec génération embedding après {max_retries} tentatives")
+                    self.logger.error(f"Échec génération embedding après {max_retries} tentatives: {str(e)}")
                     return None
                 await asyncio.sleep(1)
     def _validate_json_response(self, content: str) -> Optional[dict]:

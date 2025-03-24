@@ -2,10 +2,8 @@
 import os
 import csv
 
-from datetime import datetime   
 from fuzzywuzzy import fuzz, process
 from sqlalchemy import delete, func, select
-from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Dict, Tuple
 
@@ -55,7 +53,7 @@ async def importer_clients_csv(session: AsyncSession, fichier: str = "ListeClien
         for encoding in encodings:
             try:
                 with open(fichier, 'r', encoding=encoding) as f:
-                    content = f.read()
+                    _ = f.read()
                     break
             except UnicodeDecodeError:
                 continue
@@ -155,17 +153,20 @@ async def get_all_clients() -> List[Client]:
         clients = result.scalars().all()
         logger.info(f"Retrieved {len(clients)} clients from the database.")
         return clients
-async def get_client_by_name(client_name: str) -> Optional[Client]:
+async def get_client_by_name(client_name: str) -> List[Client]:
+    """Recherche un client par nom avec correspondance partielle."""
+    if not client_name:
+        return []
+    
     async with SessionLocal() as session:
         normalized_name = normalize_string(client_name)
         # Recherche plus permissive pour "rondot" dans "client rondot" par exemple
-        exact_matches = []
         result = await session.execute(
             select(Client).filter(
                 func.upper(Client.client).contains(normalized_name)
             )
         )
-        exact_matches = result.scalars().all()
+        return result.scalars().all()
 
 def client_exists(client_name: str) -> bool:
     return get_client_by_name(client_name) is not None
@@ -188,7 +189,6 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
             logger.info(f"Nombre de clients: {len(all_clients)}")
 
             # Recherche exacte (insensible à la casse)
-            exact_matches = []
             for client in all_clients:
                 variations = list(client.variations.copy() if hasattr(client, 'variations') and client.variations else [])
                 variations.append(client.client)
@@ -200,19 +200,7 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
                     for word in words:
                         if word == norm_variation or norm_variation == word:
                             logger.info(f"Match trouvé: {client.client} via {variation} (mot: {word})")
-                            exact_matches.append(client)
-                            break
-
-            if len(exact_matches) == 1:
-                client = exact_matches[0]
-                logger.info(f"Un seul client trouvé: {client.client}")
-                return client.client, 100.0, {"source": client.client}
-            elif len(exact_matches) > 1:
-                logger.warning(f"Matches multiples: {[c.client for c in exact_matches]}")
-                # Sélectionner le premier match
-                client = exact_matches[0]
-                logger.info(f"Sélection du premier client: {client.client}")
-                return client.client, 100.0, {"source": client.client}
+                            return client.client, 100.0, {"source": client.client}
 
             # Recherche floue si aucun match exact
             best_match = None

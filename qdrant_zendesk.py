@@ -1,18 +1,21 @@
 # qdrant_zendesk.py
 
-import json
+# Imports standards
 import logging
 import asyncio
+# Note: Ces imports peuvent être utilisés dans des fonctionnalités futures ou dans des branches conditionnelles
 import hashlib
 
-from qdrant_client.http.models import Filter
+# Imports externes
 from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, Range
 
+# Imports internes
 from qdrant_jira import BaseQdrantSearch
-from configuration import logger, MAX_SEARCH_RESULTS
-from base_de_donnees import SessionLocal, QdrantSessionManager
+from configuration import MAX_SEARCH_RESULTS
+from base_de_donnees import QdrantSessionManager
+
 class QdrantZendeskSearch(BaseQdrantSearch):
     def __init__(self, collection_name=None):
         self.logger = logging.getLogger('ITS_HELP.qdrant.zendesk')
@@ -45,15 +48,16 @@ class QdrantZendeskSearch(BaseQdrantSearch):
             }
 
             # Validation des champs obligatoires (exemple : on exige seulement ticket_id et content)
-            mandatory_fields = ['ticket_id', 'content']
-            if not all(normalized_payload[f] for f in mandatory_fields):
-                missing_fields = [f for f in mandatory_fields if not normalized_payload[f]]
+            # Note: mandatory_fields est défini pour documentation et utilisation future
+            # mandatory_fields = ['ticket_id', 'content']  # Utiliser ticket_id au lieu de id
+            if not all(normalized_payload[f] for f in ['ticket_id', 'content']):
+                missing_fields = [f for f in ['ticket_id', 'content'] if not normalized_payload[f]]
                 self.logger.warning(f"Champs obligatoires manquants ou vides: {missing_fields}")
                 return {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*ZENDESK* - Données insuffisantes pour afficher ce résultat"
+                        "text": "*ZENDESK* - Données insuffisantes pour afficher ce résultat"
                     }
                 }
 
@@ -235,7 +239,9 @@ class QdrantZendeskSearch(BaseQdrantSearch):
                                 elif days_old <= 90:
                                     score_bonus = 0.05
                                 res.score = min(1.0, res.score + score_bonus)
-                            except:
+                            except (TypeError, AttributeError) as e:
+                                # Pas d'ajustement de score en cas d'erreur de calcul
+                                self.logger.debug(f"Erreur d'ajustement de score par date: {str(e)}")
                                 pass
 
                     # Conservation du meilleur score pour un même contenu
@@ -292,7 +298,7 @@ class QdrantZendeskSearch(BaseQdrantSearch):
                         self.logger.error("Question vide")
                         return []
 
-                    self.logger.info(f"=== Début recherche Zendesk ===")
+                    self.logger.info("=== Début recherche Zendesk ===")
                     self.logger.info(f"Question: {question}")
                     self.logger.info(f"Client info: {client_name}")
                     
@@ -335,7 +341,8 @@ class QdrantZendeskSearch(BaseQdrantSearch):
                     self.logger.info(f"Filtres Qdrant: {query_filter}")
                     
                     # Le reste de la fonction reste identique
-                    filtres = self.validate_filters({})
+                    # Note: filtres est déclaré ici mais sera utilisé dans des développements futurs
+                    # filtres = self.validate_filters({})
                     limit = 500
                     requete_optimisee = question
 
@@ -465,7 +472,8 @@ class QdrantZendeskSearch(BaseQdrantSearch):
             }
 
             # Validation avec seuils plus souples
-            mandatory_fields = ['ticket_id', 'content']  # Utiliser ticket_id au lieu de id
+            # Note: mandatory_fields est défini pour documentation et utilisation future
+            # mandatory_fields = ['ticket_id', 'content']  # Utiliser ticket_id au lieu de id
             if not normalized_payload.get('ticket_id') or not normalized_payload.get('content'):
                 return False  # Vérification simplifiée
 

@@ -4,7 +4,6 @@ import os
 import re
 import json
 import logging
-import pandas as pd
 import asyncio
 import hashlib
 import time
@@ -12,8 +11,7 @@ import time
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, Range
 
-from datetime import datetime, timezone, timedelta
-from dotenv import load_dotenv
+from datetime import datetime, timezone
 from openai import OpenAI
 from functools import lru_cache
 from collections import OrderedDict
@@ -21,17 +19,16 @@ from sqlalchemy import Column, String, Integer, func, select
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-from dateutil.parser import parse
 from typing import Optional, Union, Dict, List, Any, Tuple
 
-from configuration import logger, MAX_SEARCH_RESULTS
-from base_de_donnees import SessionLocal, normalize_string, ClientContext, QdrantSessionManager, PayloadMapping
-from base_de_donnees import DBClient as Client
+from configuration import MAX_SEARCH_RESULTS
+from base_de_donnees import normalize_string, QdrantSessionManager, PayloadMapping
 
+# Configuration du logger pour ce module
 logger = logging.getLogger(__name__)
 Base = declarative_base()
 
-class Client(Base):
+class JiraClient(Base):
     __tablename__ = 'clients'
     
     id = Column(Integer, primary_key=True)
@@ -173,14 +170,9 @@ class BaseQdrantSearch:
                         if len(vector) != 1536:  # Taille attendue pour ada-002
                             raise ValueError(f"Taille du vecteur invalide: {len(vector)}")
 
-                        # Sauvegarde dans le cache avec métadonnées
+                        # Sauvegarde dans le cache
                         if self.CACHE_ENABLED:
-                            metadata = {
-                                'query_type': query_type,
-                                'timestamp': time.time(),
-                                'text_length': len(texte)
-                            }
-                            self._add_to_cache(cache_key, vector, metadata)
+                            self._add_to_cache(cache_key, vector)
 
                         return vector
 
@@ -358,8 +350,8 @@ class BaseQdrantSearch:
                 client_name = client_name.get('source', '')
             normalized_name = normalize_string(client_name)
             result = await session.execute(
-                select(Client).filter(
-                    func.upper(Client.client) == normalized_name
+                select(JiraClient).filter(
+                    func.upper(JiraClient.client) == normalized_name
                 )
             )
             clients = result.scalars().all()
@@ -476,10 +468,21 @@ class BaseQdrantSearch:
                     content = match.group(1).strip()
             if not (content.startswith('{') and content.endswith('}')):
                 return None
+            if not content or content.strip().startswith("<"):
+                return None
             data = json.loads(content)
             if not isinstance(data, dict):
                 return None
-            return data
+            cleaned_data = {}
+            for key, value in data.items():
+                if isinstance(key, str) and isinstance(value, str):
+                    cleaned_value = re.sub(r'[^\w\s.,()-]', '', value)
+                    if len(cleaned_value) > 100:
+                        cleaned_value = cleaned_value[:97] + "..."
+                    cleaned_data[key] = cleaned_value
+                elif isinstance(key, str):
+                    cleaned_data[key] = str(value)
+            return cleaned_data if cleaned_data else None
         except json.JSONDecodeError:
             self.logger.error("Invalid JSON format")
             return None
@@ -743,7 +746,8 @@ class BaseQdrantSearch:
                     freshness_score = 0.10
                 elif days_old <= 180:      # Assez ancien
                     freshness_score = 0.05
-            except:
+            except Exception as e:
+                self.logger.debug(f"Erreur lors du calcul du score de fraîcheur: {str(e)}")
                 freshness_score = 0.0
             
             # Score contextuel (20%)
@@ -1119,7 +1123,7 @@ class QdrantJiraSearch(BaseQdrantSearch):
             created, updated = self._safe_format_dates(payload)
 
             # Troncature du contenu
-            content = str(payload.get('content') or payload.get('description', ''))
+            content = str(payload.get('content', ''))
             if len(content) > 500:
                 content = content[:497] + "..."
 
@@ -1185,7 +1189,7 @@ class QdrantJiraSearch(BaseQdrantSearch):
         except KeyError as ke:
             self.logger.error(f"Clé manquante pour le formatage des dates: {ke}")
             return 'N/A', 'N/A'
-        except Exception as e:
+        except Exception as _:
             self.logger.exception("Erreur inattendue lors du formatage des dates")
             raise
 
@@ -1280,10 +1284,10 @@ class QdrantJiraSearch(BaseQdrantSearch):
                        created: str, updated: str) -> Optional[str]:
         try:
             return (
-                f"*JIRA-{payload.get('key', 'N/A')}* - {payload.get('summary', 'N/A')}\n"
-                f"Client: {payload.get('client', 'N/A')} - {fiabilite} {score}%\n"
-                f"ERP: {payload.get('erp', 'N/A')} - Status: {payload.get('resolution', 'N/A')}\n"
-                f"Consultant: {payload.get('assignee', 'N/A')}\n"
+                f"*JIRA-{payload.get('key')}* - {payload.get('summary')}\n"
+                f"Client: {payload.get('client')} - {fiabilite} {score}%\n"
+                f"ERP: {payload.get('erp', 'N/A')} - Status: {payload.get('resolution', 'En cours')}\n"
+                f"Consultant: {payload.get('assignee', 'Non assigné')}\n"
                 f"Créé le: {created} - Maj: {updated}\n"
                 f"Description: {str(payload.get('content', 'N/A'))[:500]}\n\n"
                 f"URL: {payload.get('url', 'N/A')}"
@@ -1323,7 +1327,7 @@ class QdrantJiraSearch(BaseQdrantSearch):
                         self.logger.error("Question vide")
                         return []
 
-                    self.logger.info(f"=== Début recherche Jira ===")
+                    self.logger.info("=== Début recherche Jira ===")
                     self.logger.info(f"Question: {question}")
                     self.logger.info(f"Client info: {client_name}")
                     
