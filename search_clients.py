@@ -120,7 +120,55 @@ class ZendeskSearchClient(JiraSearchClient):
         except Exception as e:
             logger.error(f"Erreur validation résultat Zendesk: {str(e)}")
             return False
-
+            
+    async def format_for_slack(self, result: Any) -> Optional[Dict]:
+        """Formate un résultat Zendesk pour affichage dans Slack."""
+        try:
+            payload = self.processor.extract_payload(result)
+            score = self.processor.extract_score(result)
+            
+            # Validation des champs essentiels
+            if not all(field in payload for field in ['ticket_id', 'content']):
+                logger.warning(f"Champs requis manquants dans le ticket Zendesk: {list(payload.keys())}")
+                return None
+                
+            # Calcul de la fiabilité basée sur le score
+            score_percent = round(score * 100)
+            fiabilite = "🟢" if score_percent > 80 else "🟡" if score_percent > 60 else "🔴"
+            
+            # Formatage des dates
+            created_date, updated_date = self._format_dates(payload)
+            
+            # Récupération des champs spécifiques à Zendesk
+            ticket_id = payload.get('ticket_id', payload.get('id', 'N/A'))
+            summary = payload.get('summary', 'Sans titre')
+            
+            # Troncature du contenu
+            content = str(payload.get('content', ''))
+            content = (content[:497] + "...") if len(content) > 500 else content
+            
+            # Construction du message formaté
+            message = (
+                f"*ZENDESK-{ticket_id}* - {fiabilite} {score_percent}%\n"
+                f"*ID:* {ticket_id} - *Client:* {payload.get('client', 'N/A')}\n"
+                f"*Titre:* {summary}\n"
+                f"*Status:* {payload.get('status', '')} - *Assigné à:* {payload.get('assignee', 'Non assigné')}\n"
+                f"*Créé le:* {created_date} - *Maj:* {updated_date}\n"
+                f"*Description:* {content}\n"
+                f"*URL:* {payload.get('url', 'N/A')}"
+            )
+            
+            return {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": message
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Erreur format Zendesk: {str(e)}")
+            return None
 
 class ERPSearchClient(AbstractSearchClient):
     """Client de recherche base pour les sources ERP (NetSuite, SAP)."""
@@ -198,6 +246,7 @@ class ERPSearchClient(AbstractSearchClient):
         except Exception as e:
             logger.error(f"Erreur format ERP: {str(e)}")
             return None
+
 class NetsuiteSearchClient(ERPSearchClient):
     """Client de recherche spécialisé pour les documents NetSuite."""
 

@@ -230,6 +230,10 @@ async def test_chatbot_direct(question: str, format_json: bool = False, verbose:
                             if key in payload:
                                 result_dict[key] = payload[key]
                         
+                        # Gestion de l'encodage pour les caractères accentués
+                        result_dict["title"] = result_dict["title"].encode('utf-8', 'replace').decode('utf-8')
+                        result_dict["content"] = result_dict["content"].encode('utf-8', 'replace').decode('utf-8')
+                        
                         results_list.append(result_dict)
                     except Exception as e:
                         results_list.append({"error": f"Erreur lors de la conversion du résultat: {str(e)}"})
@@ -387,8 +391,8 @@ async def test_chatbot_direct(question: str, format_json: bool = False, verbose:
                                 }
                             })
                             
-                        except Exception as e:
-                            print(f" Erreur: {str(e)}")
+                        except Exception as error:
+                            print(f" Erreur: {str(error)}")
                             failed_results += 1
                             
                             # Ajout d'un bloc d'erreur
@@ -396,12 +400,12 @@ async def test_chatbot_direct(question: str, format_json: bool = False, verbose:
                                 "type": "section",
                                 "text": {
                                     "type": "mrkdwn",
-                                    "text": f"⚠️ Erreur lors du formatage du résultat #{i+1}: {str(e)}"
+                                    "text": f"⚠️ Erreur lors du formatage du résultat #{i+1}: {str(error)}"
                                 }
                             })
                     
-                    except Exception as e:
-                        print(f"\nErreur lors du traitement du résultat {i+1}: {str(e)}")
+                    except Exception as error:
+                        print(f"\nErreur lors du traitement du résultat {i+1}: {str(error)}")
                         failed_results += 1
                 
                 # Résumé du formatage progressif
@@ -434,13 +438,13 @@ async def test_chatbot_direct(question: str, format_json: bool = False, verbose:
                             "text": {"type": "mrkdwn", "text": f"⚠️ *Délai d'attente dépassé ({timeout}s)*\n\nLe formatage de la réponse a pris trop de temps. Cela peut indiquer un problème dans le traitement des résultats ou dans l'API utilisée pour la génération du résumé."}
                         }]
                     }
-                except Exception as e:
-                    logging.error(f"Erreur lors de la génération de la réponse: {str(e)}")
+                except Exception as error:
+                    logging.error(f"Erreur lors de la génération de la réponse: {str(error)}")
                     formatted_response = {
-                        "text": f"Erreur lors de la génération de la réponse: {str(e)}",
+                        "text": f"Erreur lors de la génération de la réponse: {str(error)}",
                         "blocks": [{
                             "type": "section",
-                            "text": {"type": "mrkdwn", "text": f"Erreur lors de la génération de la réponse: {str(e)}"}
+                            "text": {"type": "mrkdwn", "text": f"Erreur lors de la génération de la réponse: {str(error)}"}
                         }]
                     }
             
@@ -485,7 +489,14 @@ async def test_chatbot_direct(question: str, format_json: bool = False, verbose:
                                     block_text = block_text.replace("\U00002705", "[VALIDÉ]")
                                     block_text = block_text.replace("\U0000274c", "[ERREUR]")
                                     block_text = block_text.replace("•", "-")
-                                    print(block_text)
+                                    
+                                    # Sécuriser l'encodage pour les caractères accentués
+                                    try:
+                                        block_text = block_text.encode('utf-8', 'replace').decode('utf-8')
+                                        print(block_text)
+                                    except UnicodeEncodeError:
+                                        # Fallback pour les terminaux qui ne supportent pas certains caractères
+                                        print(block_text.encode('ascii', 'replace').decode('ascii'))
                                 
                                 if "attachments" in block:
                                     for attachment in block["attachments"]:
@@ -493,23 +504,34 @@ async def test_chatbot_direct(question: str, format_json: bool = False, verbose:
                                             for field in attachment["fields"]:
                                                 field_title = field.get("title", "").replace("\U0001f7e2", "[VERT]").replace("\U0001f534", "[ROUGE]")
                                                 field_value = field.get("value", "").replace("\U0001f7e2", "[VERT]").replace("\U0001f534", "[ROUGE]")
-                                                print(f"{field_title}: {field_value}")
+                                                
+                                                # Sécuriser l'encodage
+                                                try:
+                                                    field_title = field_title.encode('utf-8', 'replace').decode('utf-8')
+                                                    field_value = field_value.encode('utf-8', 'replace').decode('utf-8')
+                                                    print(f"{field_title}: {field_value}")
+                                                except UnicodeEncodeError:
+                                                    print(f"{field_title.encode('ascii', 'replace').decode('ascii')}: {field_value.encode('ascii', 'replace').decode('ascii')}")
                                         
                                         if "text" in attachment:
                                             attachment_text = attachment["text"].get("text", "").replace("\U0001f7e2", "[VERT]").replace("\U0001f534", "[ROUGE]")
-                                            print(attachment_text)
-                            except Exception as e:
-                                print(f"Erreur dans l'affichage du bloc {i}: {str(e)}")
+                                            try:
+                                                attachment_text = attachment_text.encode('utf-8', 'replace').decode('utf-8')
+                                                print(attachment_text)
+                                            except UnicodeEncodeError:
+                                                print(attachment_text.encode('ascii', 'replace').decode('ascii'))
+                            except Exception as error:
+                                print(f"Erreur dans l'affichage du bloc {i+1}: {str(error)}")
                         
                         print('-' * 50)
-                except Exception as e:
-                    print(f"Erreur lors de l'affichage de la réponse: {str(e)}")
+                except Exception as error:
+                    print(f"Erreur lors de l'affichage de la réponse: {str(error)}")
                     print("Affichage simplifié de la réponse:")
                     if "text" in formatted_response:
                         try:
                             print(formatted_response["text"].encode('ascii', 'replace').decode('ascii'))
-                        except Exception as e:
-                            print(f"[Texte avec caractères spéciaux non affichables: {str(e)}]")
+                        except Exception as error:
+                            print(f"[Texte avec caractères spéciaux non affichables: {str(error)}]")
                 
                 # Affichage des actions disponibles
                 if "actions" in formatted_response and not only_final_answer:
@@ -519,10 +541,10 @@ async def test_chatbot_direct(question: str, format_json: bool = False, verbose:
         
         print("\n" + "=" * 80)
     
-    except Exception as e:
-        logging.error(f"Erreur lors du test: {str(e)}")
+    except Exception as error:
+        logging.error(f"Erreur lors du test: {str(error)}")
         traceback = sys.exc_info()[2]
-        print(f"Erreur: {str(e)}")
+        print(f"Erreur: {str(error)}")
         print(f"Traceback: {traceback.tb_frame.f_code.co_filename} ligne {traceback.tb_lineno}")
 
 def main():
@@ -589,8 +611,8 @@ def main():
                 print("\nFin d'entrée détectée. Arrêt du programme.")
                 break
             
-            except Exception as e:
-                print(f"Erreur: {str(e)}")
+            except Exception as error:
+                print(f"Erreur: {str(error)}")
                 print("Saisissez une nouvelle question ou 'quit' pour quitter (Ctrl+C pour quitter):")
                 # Éviter une boucle infinie en cas d'erreur persistante
                 try:
@@ -608,9 +630,9 @@ def main():
                         except (EOFError, KeyboardInterrupt):
                             print("\nProgramme terminé.")
                             return
-                except Exception as e:
+                except Exception as error:
                     # En cas d'erreur persistante, sortir de la boucle
-                    print(f"\nTrop d'erreurs successives: {str(e)}. Programme terminé.")
+                    print(f"\nTrop d'erreurs successives: {str(error)}. Programme terminé.")
                     break
     else:
         # Si la question est fournie en argument, l'utiliser directement
