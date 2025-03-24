@@ -185,61 +185,94 @@ def start_application():
     logger.info("Préparation du démarrage de l'application...")
     
     # Arrêter les processus Python existants
-    kill_python_processes()
+    try:
+        kill_python_processes()
+    except Exception as e:
+        logger.error(f"Erreur lors de l'arrêt des processus Python: {str(e)}")
     
     # Trouver un port libre
-    port = find_free_port()
-    if not port:
-        logger.error("Impossible de démarrer l'application sans port disponible")
+    try:
+        logger.info("Recherche d'un port disponible...")
+        port = find_free_port()
+        if not port:
+            logger.error("Impossible de démarrer l'application sans port disponible")
+            return None
+        logger.info(f"Port disponible trouvé: {port}")
+    except Exception as e:
+        logger.error(f"Erreur lors de la recherche d'un port: {str(e)}")
         return None
     
     # Mettre à jour la variable d'environnement PORT
-    os.environ['PORT'] = str(port)
+    try:
+        os.environ['PORT'] = str(port)
+        logger.info(f"Variable d'environnement PORT définie à {port}")
+    except Exception as e:
+        logger.error(f"Erreur lors de la définition de PORT: {str(e)}")
+        return None
     
     logger.info(f"Démarrage de l'application sur le port {port}...")
     
-    # Utiliser une ligne de commande adaptée à Windows
-    cmd = [
-        sys.executable,  # Chemin Python actuel
-        "-c",
-        f"""
+    # Créer un script Python autonome
+    try:
+        logger.info("Création d'un script Python temporaire...")
+        with open('run_temp_app.py', 'w', encoding='utf-8') as f:
+            f.write("""
 import os
-import asyncio
 import logging
 from app import app, socketio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('ITS_HELP')
 
-logger.info("Démarrage du serveur sur le port {port}...")
-socketio.run(app, host='0.0.0.0', port={port}, 
-             debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
-        """
-    ]
+print('Démarrage du serveur ITS HELP...')
+port = {0}
+print(f'Port utilisé: {{port}}')
+socketio.run(app, host='0.0.0.0', port=port, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
+""".format(port))
+    except Exception as e:
+        logger.error(f"Erreur lors de la création du script temporaire: {str(e)}")
+        return None
     
-    # Exécuter la commande et capturer sa sortie
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-        universal_newlines=True
-    )
-    
-    logger.info(f"Application démarrée avec PID {process.pid}")
-    logger.info(f"Vous pouvez accéder à l'application sur http://localhost:{port}")
-    logger.info("Appuyez sur Ctrl+C pour arrêter le serveur")
-    
-    # Afficher la sortie en temps réel
+    # Création du fichier batch pour lancer le script Python
     try:
-        for line in process.stdout:
-            print(line, end='')
-        for line in process.stderr:
-            print(line, end='')
-    except KeyboardInterrupt:
-        logger.info("Arrêt de l'application...")
-        process.terminate()
+        with open('run_app_temp.bat', 'w', encoding='utf-8') as f:
+            f.write('@echo off\n')
+            f.write('echo Demarrage de ITS Help...\n')
+            f.write(f'"{sys.executable}" run_temp_app.py\n')
+            f.write('pause\n')
+    except Exception as e:
+        logger.error(f"Erreur lors de la création du fichier batch: {str(e)}")
+        return None
+    
+    # Exécuter le batch en mode détaché
+    try:
+        logger.info("Démarrage du processus en mode détaché...")
+        
+        # Exécution du fichier batch en mode détaché
+        if os.name == 'nt':  # Windows
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            process = subprocess.Popen(
+                ['cmd', '/c', 'start', 'cmd', '/k', 'run_app_temp.bat'], 
+                shell=True,
+                startupinfo=startupinfo
+            )
+            logger.info("Processus de la commande 'start' démarré")
+        else:
+            logger.error("Cette méthode de démarrage n'est pas implémentée pour ce système d'exploitation")
+            return None
+    except Exception as e:
+        logger.error(f"Erreur lors du démarrage du processus: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
+    
+    logger.info("Application démarrée en mode détaché")
+    logger.info(f"Vous pouvez accéder à l'application sur http://localhost:{port}")
+    logger.info("Vous pouvez fermer cette fenêtre. L'application continuera à s'exécuter dans une autre fenêtre.")
+    
+    # Attendre un peu pour permettre à l'application de démarrer
+    time.sleep(2)
     
     return process
 
@@ -247,22 +280,45 @@ def main():
     """Fonction principale"""
     print("=== Démarrage de ITS Help sur Windows ===")
     
-    ensure_directories()
-    
-    if not load_environment():
-        print("Erreur lors du chargement des variables d'environnement. Arrêt.")
+    try:
+        ensure_directories()
+        
+        if not load_environment():
+            print("Erreur lors du chargement des variables d'environnement. Arrêt.")
+            return 1
+        
+        if not patch_app_py():
+            print("Erreur lors de l'application des correctifs. Arrêt.")
+            return 1
+        
+        try:
+            logger.info("Appel de start_application()...")
+            process = start_application()
+            if not process:
+                print("Erreur lors du démarrage de l'application. Arrêt.")
+                return 1
+        except Exception as e:
+            logger.error(f"Exception lors du démarrage de l'application: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            print(f"Exception lors du démarrage de l'application: {str(e)}")
+            return 1
+        
+        return 0
+    except Exception as e:
+        logger.error(f"Exception dans la fonction principale: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        print(f"Exception dans la fonction principale: {str(e)}")
         return 1
-    
-    if not patch_app_py():
-        print("Erreur lors de l'application des correctifs. Arrêt.")
-        return 1
-    
-    process = start_application()
-    if not process:
-        print("Erreur lors du démarrage de l'application. Arrêt.")
-        return 1
-    
-    return 0
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        exit_code = main()
+        sys.exit(exit_code)
+    except Exception as e:
+        logger.error(f"Exception non capturée: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        print(f"Exception non capturée: {str(e)}")
+        sys.exit(1)

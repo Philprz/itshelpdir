@@ -4,10 +4,10 @@ import asyncio
 import hashlib
 import logging
 import time
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 
-from configuration import logger, global_cache
+from configuration import global_cache
 
 class EmbeddingService:
     """Service centralisé de génération d'embeddings avec cache optimisé et gestion des erreurs."""

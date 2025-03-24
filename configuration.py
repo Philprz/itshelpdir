@@ -12,14 +12,13 @@ import logging.handlers
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from functools import partial
 from collections import OrderedDict
 
 # 2. Imports de bibliothèques tierces
 from typing import Dict, Optional, AsyncGenerator
 from openai import AsyncOpenAI
 from qdrant_client import QdrantClient
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 
 DETAILED_LOGGING = {
@@ -250,6 +249,47 @@ class GlobalCache:
             except Exception:
                 # Ignorer les erreurs lors de la suppression
                 pass
+                
+    def clear(self, namespace=None):
+        """Vide le cache entier ou le namespace spécifié."""
+        try:
+            if namespace:
+                # Si un namespace est spécifié, supprimer uniquement les clés de ce namespace
+                prefix = f"{namespace}:"
+                keys_to_remove = [k for k in self._cache.keys() if k.startswith(prefix)]
+                for key in keys_to_remove:
+                    self._remove_item(key)
+                logger.info(f"Cache vidé pour le namespace: {namespace}")
+            else:
+                # Si aucun namespace n'est spécifié, vider tout le cache
+                self._cache = {}
+                self._access_times = {}
+                self._size_tracker = {}
+                self._total_memory = 0
+                logger.info("Cache entièrement vidé")
+        except Exception as e:
+            logger.error(f"Erreur lors du vidage du cache: {str(e)}")
+
+    def status(self):
+        """Retourne les statistiques du cache."""
+        try:
+            total_items = len(self._cache)
+            namespaces = {}
+            for key in self._cache.keys():
+                namespace = key.split(':', 1)[0] if ':' in key else 'default'
+                namespaces[namespace] = namespaces.get(namespace, 0) + 1
+                
+            return {
+                "total_items": total_items,
+                "total_memory_mb": round(self._total_memory / (1024 * 1024), 2),
+                "max_memory_mb": round(self._max_memory / (1024 * 1024), 2),
+                "namespaces": namespaces,
+                "max_size": self._max_size,
+                "ttl": self._ttl
+            }
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération du statut du cache: {str(e)}")
+            return {"error": str(e)}
 
 # Initialisation du cache global
 global_cache = GlobalCache(

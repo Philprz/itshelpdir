@@ -339,42 +339,73 @@ def handle_message(data):
         # Passer le message à la file d'attente pour traitement ultérieur
         socketio.start_background_task(run_process_message, user_id, message, mode)
         return
-        
-    # Utiliser le pool de workers pour soumettre le traitement asynchrone
-    try:
-        asyncio.run_coroutine_threadsafe(
-            worker_pool.submit(
-                process_message(user_id, message, mode),
-                priority=1,  # Priorité standard
-                user_id=user_id,
-                timeout=120  # Timeout de 2 minutes
-            ),
-            asyncio.get_event_loop()
-        )
-    except Exception as e:
-        logger.error(f"Erreur lors de la soumission du message au worker pool: {str(e)}")
-        emit('response', {'message': 'Erreur lors du traitement: ' + str(e), 'type': 'error'})
-        return
     
-    # Envoi d'un accusé de réception
-    emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
+    # Traiter directement le message de façon synchrone dans un thread de fond
+    # pour éviter les problèmes avec les event loops asynchrones
+    try:
+        # Lancer le traitement dans un thread distinct géré par socketio
+        socketio.start_background_task(
+            process_message_background,
+            user_id=user_id, 
+            message=message, 
+            mode=mode
+        )
+        # Envoi d'un accusé de réception
+        emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
+    except Exception as e:
+        logger.error(f"Erreur lors du démarrage du traitement: {str(e)}")
+        emit('response', {'message': 'Erreur lors du traitement: ' + str(e), 'type': 'error'})
 
 def run_process_message(user_id, message, mode="detail"):
     """
     Version compatible de l'ancienne fonction utilisant le pool de workers.
     Cette fonction est maintenue pour compatibilité avec le code existant.
     """
-    # Utiliser le pool de workers pour soumettre la tâche
-    asyncio.run_coroutine_threadsafe(
-        worker_pool.submit(
-            process_message(user_id, message, mode),
-            priority=2,  # Priorité inférieure aux messages SocketIO directs
-            user_id=user_id,
-            timeout=120  # Timeout de 2 minutes
-        ),
-        asyncio.get_event_loop()
-    )
-    logger.info(f"Tâche de traitement soumise au pool pour message: {message[:30]}...")
+    try:
+        # Lancer directement le traitement dans un thread distinct
+        socketio.start_background_task(
+            process_message_background,
+            user_id=user_id, 
+            message=message, 
+            mode=mode
+        )
+        logger.info(f"Tâche de traitement lancée pour message: {message[:30]}...")
+    except Exception as e:
+        logger.error(f"Erreur lors du lancement du traitement: {str(e)}")
+
+def process_message_background(user_id, message, mode):
+    """Wrapper synchrone pour appeler la coroutine process_message de manière sécurisée"""
+    # Créer une nouvelle boucle asyncio pour ce thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        # Exécuter la coroutine process_message de manière synchrone
+        loop.run_until_complete(process_message(user_id, message, mode))
+    except Exception as e:
+        logger.error(f"Erreur dans process_message_background: {str(e)}")
+        stacktrace = traceback.format_exc()
+        logger.error(f"Stack trace: {stacktrace}")
+        # Notification d'erreur à l'utilisateur via socket.io
+        socketio.emit('response', {
+            'message': f"Une erreur s'est produite lors du traitement: {str(e)}",
+            'type': 'error'
+        }, room=user_id)
+    finally:
+        # Fermer proprement la boucle
+        try:
+            # Annuler toutes les tâches pendantes
+            pending = asyncio.all_tasks(loop=loop)
+            for task in pending:
+                task.cancel()
+            
+            # Exécuter jusqu'à ce que toutes les tâches annulées soient terminées
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            
+            loop.close()
+        except Exception as close_e:
+            logger.error(f"Erreur lors de la fermeture de la boucle: {str(close_e)}")
 
 async def process_message(user_id, message, mode):
     """Traite le message de manière asynchrone avec gestion améliorée des erreurs"""
