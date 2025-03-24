@@ -400,7 +400,7 @@ class ChatBot:
                 else:
                     payload = res.payload.__dict__ if hasattr(res.payload, '__dict__') else {}
 
-                content = str(payload.get('content', '') or payload.get('text', ''))
+                content = str(payload.get('content', '') or payload.get('text', '') or "Pas de contenu")
             except Exception:
                 content = "content_extraction_failed"
 
@@ -933,107 +933,116 @@ class ChatBot:
                 }
 
             # Timeout global pour limiter le temps de traitement
-            async with asyncio.timeout(45):  # 45 secondes max pour le traitement complet
-                # Analyse de la question pour déterminer le contexte et la stratégie
-                analysis = await asyncio.wait_for(self.analyze_question(text), timeout=45)
+            try:
+                async with asyncio.timeout(120):  # Augmenté à 120 secondes pour le traitement complet
+                    # Analyse de la question pour déterminer le contexte et la stratégie
+                    analysis = await asyncio.wait_for(self.analyze_question(text), timeout=60)  # Augmenté à 60 secondes
 
-                if not analysis or not isinstance(analysis, dict):
-                    return {
-                        "text": "Je n'ai pas pu analyser votre question. Pourriez-vous la reformuler ?",
-                        "blocks": [{
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": "Je n'ai pas pu analyser votre question. Pourriez-vous la reformuler ?"}
-                        }]
-                    }
-
-                # Extraction du client
-                client_info = None
-                search_context = analysis.get("search_context", {})
-                if search_context.get("has_client"):
-                    client_name, score, client_details = await extract_client_name(text)
-                    if client_details and client_details.get("ambiguous"):
-                        possibilities = client_details.get("possibilities", [])
+                    if not analysis or not isinstance(analysis, dict):
                         return {
-                            "text": f"Plusieurs clients possibles : {', '.join(possibilities)}. Pouvez-vous préciser ?",
+                            "text": "Je n'ai pas pu analyser votre question. Pourriez-vous la reformuler ?",
                             "blocks": [{
                                 "type": "section",
-                                "text": {"type": "mrkdwn", "text": f"Plusieurs clients possibles : {', '.join(possibilities)}. Pouvez-vous préciser ?"}
+                                "text": {"type": "mrkdwn", "text": "Je n'ai pas pu analyser votre question. Pourriez-vous la reformuler ?"}
                             }]
                         }
-                    if client_name:
-                        client_info = {"source": client_name, "jira": client_name, "zendesk": client_name}
-                        self.logger.info(f"Client trouvé: {client_name}")
 
-                # Tentative d'extraction directe du client si non trouvé par l'analyse
-                if not client_info:
-                    client_name, score, client_details = await extract_client_name(text)
-                    if client_name:
-                        client_info = {"source": client_name, "jira": client_name, "zendesk": client_name}
-                        self.logger.info(f"Client trouvé (méthode directe): {client_name}")
+                    # Extraction du client
+                    client_info = None
+                    search_context = analysis.get("search_context", {})
+                    if search_context.get("has_client"):
+                        client_name, score, client_details = await extract_client_name(text)
+                        if client_details and client_details.get("ambiguous"):
+                            possibilities = client_details.get("possibilities", [])
+                            return {
+                                "text": f"Plusieurs clients possibles : {', '.join(possibilities)}. Pouvez-vous préciser ?",
+                                "blocks": [{
+                                    "type": "section",
+                                    "text": {"type": "mrkdwn", "text": f"Plusieurs clients possibles : {', '.join(possibilities)}. Pouvez-vous préciser ?"}
+                                }]
+                            }
+                        if client_name:
+                            client_info = {"source": client_name, "jira": client_name, "zendesk": client_name}
+                            self.logger.info(f"Client trouvé: {client_name}")
+
+                    # Tentative d'extraction directe du client si non trouvé par l'analyse
+                    if not client_info:
+                        client_name, score, client_details = await extract_client_name(text)
+                        if client_name:
+                            client_info = {"source": client_name, "jira": client_name, "zendesk": client_name}
+                            self.logger.info(f"Client trouvé (méthode directe): {client_name}")
+                        else:
+                            self.logger.info("Aucun client identifié pour cette requête")
+
+                    # Gestion des dates
+                    date_debut, date_fin = None, None
+                    temporal_info = search_context.get("temporal_info", {})
+
+                    if temporal_info.get("start_timestamp"):
+                        try:
+                            date_debut = datetime.fromtimestamp(temporal_info["start_timestamp"], tz=timezone.utc)
+                        except:
+                            pass
+
+                    if temporal_info.get("end_timestamp"):
+                        try:
+                            date_fin = datetime.fromtimestamp(temporal_info["end_timestamp"], tz=timezone.utc)
+                            date_fin = date_fin.replace(hour=23, minute=59, second=59, microsecond=999999)
+                        except:
+                            pass
+
+                    # Détermination des collections à utiliser
+                    collections = self.determine_collections(analysis)
+                    self.logger.info(f"Collections sélectionnées: {collections}")
+
+                    # Exécution des recherches coordonnées
+                    resultats = await self.recherche_coordonnee(
+                        collections=collections,
+                        question=text,
+                        client_info=client_info,
+                        date_debut=date_debut,
+                        date_fin=date_fin
+                    )
+
+                    if not resultats:
+                        return {
+                            "text": "Désolé, je n'ai trouvé aucun résultat pertinent pour votre question.",
+                            "blocks": [{
+                                "type": "section",
+                                "text": {"type": "mrkdwn", "text": "Désolé, je n'ai trouvé aucun résultat pertinent pour votre question."}
+                            }]
+                        }
+                    # Choix du format selon le mode transmis
+                    if mode == "detail":
+                        # Retourner directement les résultats détaillés
+                        detailed_response = await self.format_response(resultats, text)
+                        return detailed_response
                     else:
-                        self.logger.info("Aucun client identifié pour cette requête")
-
-                # Gestion des dates
-                date_debut, date_fin = None, None
-                temporal_info = search_context.get("temporal_info", {})
-
-                if temporal_info.get("start_timestamp"):
-                    try:
-                        date_debut = datetime.fromtimestamp(temporal_info["start_timestamp"], tz=timezone.utc)
-                    except:
-                        pass
-
-                if temporal_info.get("end_timestamp"):
-                    try:
-                        date_fin = datetime.fromtimestamp(temporal_info["end_timestamp"], tz=timezone.utc)
-                        date_fin = date_fin.replace(hour=23, minute=59, second=59, microsecond=999999)
-                    except:
-                        pass
-
-                # Détermination des collections à utiliser
-                collections = self.determine_collections(analysis)
-                self.logger.info(f"Collections sélectionnées: {collections}")
-
-                # Exécution des recherches coordonnées
-                resultats = await self.recherche_coordonnee(
-                    collections=collections,
-                    question=text,
-                    client_info=client_info,
-                    date_debut=date_debut,
-                    date_fin=date_fin
-                )
-
-                if not resultats:
-                    return {
-                        "text": "Désolé, je n'ai trouvé aucun résultat pertinent pour votre question.",
-                        "blocks": [{
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": "Désolé, je n'ai trouvé aucun résultat pertinent pour votre question."}
-                        }]
-                    }
-                # Choix du format selon le mode transmis
-                if mode == "detail":
-                    # Retourner directement les résultats détaillés
-                    detailed_response = await self.format_response(resultats, text)
-                    return detailed_response
-                else:
-                    # Pour le mode guide, générer un résumé avec boutons d'action
-                    summary = await self.generate_summary(resultats, text)
-                    action_buttons = { 
-                        "type": "actions",
-                        "elements": [
-                            {"type": "button", "text": {"type": "plain_text", "text": "🔍 Détails", "emoji": True}, "value": f"details:{text}"},
-                            {"type": "button", "text": {"type": "plain_text", "text": "📋 Guide", "emoji": True}, "value": f"guide:{text}"}
-                        ]
-                    }
-                    return {
-                        "text": summary,
-                        "blocks": [
-                            {"type": "section", "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}},
-                            action_buttons
-                        ]
-                    }
-
+                        # Pour le mode guide, générer un résumé avec boutons d'action
+                        summary = await self.generate_summary(resultats, text)
+                        action_buttons = { 
+                            "type": "actions",
+                            "elements": [
+                                {"type": "button", "text": {"type": "plain_text", "text": "🔍 Détails", "emoji": True}, "value": f"details:{text}"},
+                                {"type": "button", "text": {"type": "plain_text", "text": "📋 Guide", "emoji": True}, "value": f"guide:{text}"}
+                            ]
+                        }
+                        return {
+                            "text": summary,
+                            "blocks": [
+                                {"type": "section", "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}},
+                                action_buttons
+                            ]
+                        }
+            except asyncio.TimeoutError:
+                self.logger.error(f"Timeout lors du traitement du message: '{text}'")
+                return {
+                    "text": "Désolé, le traitement de votre demande a pris trop de temps. Pourriez-vous simplifier votre question ou la reformuler ?",
+                    "blocks": [{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": "Désolé, le traitement de votre demande a pris trop de temps. Pourriez-vous simplifier votre question ou la reformuler ?"}
+                    }]
+                }
 
         except Exception as e:
             self.logger.error(f"Erreur process_web_message: {str(e)}")
@@ -1102,34 +1111,15 @@ class ChatBot:
                 action_buttons = {
                     "type": "actions",
                     "elements": [
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "🔍 Détails",
-                                "emoji": True
-                            },
-                            "value": f"details:{action_value}"
-                        },
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "📋 Guide",
-                                "emoji": True
-                            },
-                            "value": f"guide:{action_value}"
-                        }
+                        {"type": "button", "text": {"type": "plain_text", "text": "🔍 Détails", "emoji": True}, "value": f"details:{action_value}"},
+                        {"type": "button", "text": {"type": "plain_text", "text": "📋 Guide", "emoji": True}, "value": f"guide:{action_value}"}
                     ]
                 }
                 
                 return {
                     "text": summary,
                     "blocks": [
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}
-                        },
+                        {"type": "section", "text": {"type": "mrkdwn", "text": f"🔍 *Résumé*\n\n{summary}"}},
                         action_buttons
                     ]
                 }
