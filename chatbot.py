@@ -9,13 +9,20 @@ import hashlib
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
-from openai import AsyncOpenAI
 
-from search_factory import search_factory
+# Importations qui seront utilisées à l'initialisation seulement
+from openai import AsyncOpenAI
 from gestion_clients import extract_client_name
+
+# Importation de la factory (pas de dépendance circulaire ici)
+from search_factory import search_factory
+
+# Import nécessaire partout dans le code
 from base_de_donnees import global_cache
-from embedding_service import EmbeddingService
-from translation_service import TranslationService
+
+# Déplacement à l'intérieur des méthodes pour éviter les cycles
+# from embedding_service import EmbeddingService
+# from translation_service import TranslationService
 
 class ChatBot:
     """
@@ -35,7 +42,10 @@ class ChatBot:
         # Client OpenAI
         self.openai_client = AsyncOpenAI(api_key=openai_key)
         
-        # Initialisation des services
+        # Initialisation des services avec imports locaux pour éviter les cycles
+        from embedding_service import EmbeddingService
+        from translation_service import TranslationService
+        
         self.embedding_service = EmbeddingService(self.openai_client, global_cache)
         self.translation_service = TranslationService(None, global_cache)
         self.translation_service.set_async_client(self.openai_client)

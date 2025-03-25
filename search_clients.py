@@ -1,5 +1,5 @@
 from typing import Dict, Optional, Any
-from search_base import AbstractSearchClient, SearchResultProcessor
+from search_base import AbstractSearchClient, DefaultResultProcessor
 from configuration import logger
 
 
@@ -10,7 +10,11 @@ class JiraSearchClient(AbstractSearchClient):
         super().__init__(collection_name, qdrant_client, embedding_service)
         self.translation_service = translation_service
         self.required_fields = ['key', 'summary', 'content', 'client']
-        self.processor = SearchResultProcessor()  # Correction ici
+        self.processor = DefaultResultProcessor()  # Utilisation du processeur par défaut
+
+    def get_source_name(self) -> str:
+        """Retourne le nom de la source de données."""
+        return "JIRA"
 
     def valider_resultat(self, result: Any) -> bool:
         """Valide qu'un résultat Jira est exploitable."""
@@ -98,12 +102,18 @@ class JiraSearchClient(AbstractSearchClient):
 # AUTRES CLIENTS À AJOUTER
 # =======================
 
-class ZendeskSearchClient(JiraSearchClient):
+class ZendeskSearchClient(AbstractSearchClient):
     """Client de recherche spécialisé pour les tickets Zendesk."""
 
     def __init__(self, collection_name, qdrant_client, embedding_service, translation_service=None):
-        super().__init__(collection_name, qdrant_client, embedding_service, translation_service)
+        super().__init__(collection_name, qdrant_client, embedding_service)
+        self.translation_service = translation_service
         self.required_fields = ['ticket_id', 'summary', 'content', 'client']
+        self.processor = DefaultResultProcessor()
+
+    def get_source_name(self) -> str:
+        """Retourne le nom de la source de données."""
+        return "ZENDESK"
 
     def valider_resultat(self, result: Any) -> bool:
         """Valide qu'un résultat Zendesk est exploitable."""
@@ -170,6 +180,24 @@ class ZendeskSearchClient(JiraSearchClient):
             logger.error(f"Erreur format Zendesk: {str(e)}")
             return None
 
+    def _format_dates(self, payload: Dict) -> tuple:
+        """Formate les dates pour l'affichage."""
+        try:
+            created = payload.get('created')
+            updated = payload.get('updated')
+
+            def format_date(date_str):
+                if not date_str:
+                    return 'N/A'
+                date = self.processor.normalize_date(date_str)
+                return date.strftime("%Y-%m-%d") if date else 'N/A'
+
+            return format_date(created), format_date(updated)
+
+        except Exception as e:
+            logger.error(f"Erreur formatage dates: {str(e)}")
+            return 'N/A', 'N/A'
+
 class ERPSearchClient(AbstractSearchClient):
     """Client de recherche base pour les sources ERP (NetSuite, SAP)."""
 
@@ -177,7 +205,11 @@ class ERPSearchClient(AbstractSearchClient):
         super().__init__(collection_name, qdrant_client, embedding_service)
         self.translation_service = translation_service
         self.required_fields = ['title', 'content']
-        self.processor = SearchResultProcessor()
+        self.processor = DefaultResultProcessor()
+
+    def get_source_name(self) -> str:
+        """Retourne le nom de la source de données ERP générique."""
+        return "ERP"
 
     def valider_resultat(self, result: Any) -> bool:
         """Valide qu'un résultat ERP est exploitable."""
@@ -266,7 +298,11 @@ class ConfluenceSearchClient(AbstractSearchClient):
         super().__init__(collection_name, qdrant_client, embedding_service)
         self.translation_service = translation_service
         self.required_fields = ['id', 'summary', 'content', 'client', 'space_id']
-        self.processor = SearchResultProcessor()
+        self.processor = DefaultResultProcessor()
+
+    def get_source_name(self) -> str:
+        """Retourne le nom de la source de données."""
+        return "CONFLUENCE"
 
     def valider_resultat(self, result: Any) -> bool:
         """Valide qu'un résultat Confluence est exploitable."""
@@ -346,13 +382,42 @@ class ConfluenceSearchClient(AbstractSearchClient):
             logger.error(f"Erreur formatage dates: {str(e)}")
             return 'N/A', 'N/A'
         
-class NetsuiteDummiesSearchClient(ERPSearchClient):
+class NetsuiteDummiesSearchClient(AbstractSearchClient):
     """Client de recherche spécialisé pour les documents de démonstration NetSuite."""
     
     def __init__(self, collection_name, qdrant_client, embedding_service, translation_service=None):
-        super().__init__(collection_name, qdrant_client, embedding_service, translation_service)
+        super().__init__(collection_name, qdrant_client, embedding_service)
+        self.translation_service = translation_service
         self.required_fields = ['title', 'text', 'pdf_path']
+        self.processor = DefaultResultProcessor()
     
+    def get_source_name(self) -> str:
+        """Retourne le nom de la source de données."""
+        return "NETSUITE_DUMMIES"
+
+    def get_source_prefix(self) -> str:
+        """Retourne le préfixe pour les sources NetSuite Dummies."""
+        return "NS-DEMO"
+        
+    def valider_resultat(self, result: Any) -> bool:
+        """Valide qu'un résultat NetSuite Dummies est exploitable."""
+        try:
+            payload = self.processor.extract_payload(result)
+            score = self.processor.extract_score(result)
+
+            # Vérification des champs requis
+            missing_fields = [field for field in self.required_fields if not payload.get(field)]
+            if missing_fields:
+                logger.debug(f"Champs manquants dans le résultat: {missing_fields}")
+                return False
+
+            # Vérification du score minimum
+            return score >= 0.5
+
+        except Exception as e:
+            logger.error(f"Erreur validation résultat NetSuite Dummies: {str(e)}")
+            return False
+
     async def format_for_slack(self, result: Any) -> Optional[Dict]:
         """Formate un résultat NetSuite Dummies pour affichage."""
         try:
@@ -405,7 +470,3 @@ class NetsuiteDummiesSearchClient(ERPSearchClient):
         except Exception as e:
             logger.error(f"Erreur format NetSuite Dummies: {str(e)}")
             return None
-    
-    def get_source_prefix(self) -> str:
-        return "NETSUITE_DUMMIES"
-    

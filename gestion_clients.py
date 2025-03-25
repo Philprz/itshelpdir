@@ -172,6 +172,15 @@ def client_exists(client_name: str) -> bool:
     return get_client_by_name(client_name) is not None
 
 async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[str, str]]:
+    """
+    Extrait le nom du client à partir d'un message.
+    
+    Args:
+        message: Le message à analyser
+        
+    Returns:
+        Tuple (nom_client, score, metadata)
+    """
     async with SessionLocal() as session:
         try:
             if not message or len(message.strip()) < 2:
@@ -181,7 +190,10 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
             # Normalisation du message pour éviter les problèmes de casse
             message_clean = normalize_string(message)
             logger.info(f"Message normalisé: {message_clean}")
-
+            
+            # Liste de mots-clés courants qui peuvent précéder un nom de client
+            mots_cles = ["ticket", "tickets", "client", "société", "entreprise", "dossier", "problème", "chez"]
+            
             # Récupération de tous les clients
             stmt = select(Client)
             result = await session.execute(stmt)
@@ -197,10 +209,28 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
                 for variation in variations:
                     norm_variation = normalize_string(variation)
                     words = message_clean.split()
+                    
+                    # 1. Recherche de mots complets
                     for word in words:
                         if word == norm_variation or norm_variation == word:
                             logger.info(f"Match trouvé: {client.client} via {variation} (mot: {word})")
                             return client.client, 100.0, {"source": client.client}
+                    
+                    # 2. Recherche après des mots-clés courants
+                    for i, word in enumerate(words):
+                        if word.lower() in mots_cles and i < len(words) - 1:
+                            # Vérifier si le mot suivant est le nom du client
+                            next_word = words[i + 1]
+                            if next_word == norm_variation:
+                                logger.info(f"Match trouvé après mot-clé '{word}': {client.client}")
+                                return client.client, 100.0, {"source": client.client, "keyword": word}
+                            
+                            # Vérifier aussi les combinaisons de mots (pour les noms multi-mots)
+                            if i < len(words) - 2:
+                                two_words = f"{words[i + 1]} {words[i + 2]}"
+                                if normalize_string(two_words) == norm_variation:
+                                    logger.info(f"Match trouvé après mot-clé '{word}' (multi-mots): {client.client}")
+                                    return client.client, 100.0, {"source": client.client, "keyword": word}
 
             # Recherche floue si aucun match exact
             best_match = None
@@ -215,14 +245,16 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
                     norm_variation = normalize_string(variation)
                     ratio_score = fuzz.ratio(message_clean, norm_variation)
                     token_sort_score = fuzz.token_sort_ratio(message_clean, norm_variation)
-                    score = max(ratio_score, token_sort_score)
+                    # Ajouter token_set_ratio qui est plus flexible pour les mots dans un ordre différent
+                    token_set_score = fuzz.token_set_ratio(message_clean, norm_variation)
+                    score = max(ratio_score, token_sort_score, token_set_score)
 
                     if score > best_score:
                         best_score = score
                         best_match = client
 
             # Réduire le seuil pour améliorer la détection
-            if best_match and best_score >= 60:
+            if best_match and best_score >= 50:  # Seuil réduit de 60% à 50%
                 logger.info(f"Match flou: {best_match.client} ({best_score}%)")
                 return best_match.client, best_score, {"source": best_match.client}
 
@@ -232,9 +264,6 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
         except Exception as e:
             logger.error(f"Erreur extraction client: {str(e)}")
             return None, 0.0, {}
-
-
-
 async def validate_message(message: str) -> bool:
     try:
         if not message or not isinstance(message, str):

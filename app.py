@@ -22,8 +22,6 @@ from openai import OpenAIError
 # Imports internes
 from configuration import logger, global_cache
 from base_de_donnees import init_db
-from chatbot import ChatBot
-from search_factory import search_factory
 
 # Vérification de disponibilité des libs de transport pour Socket.IO
 has_eventlet = find_spec("eventlet") is not None
@@ -163,6 +161,7 @@ class ApplicationContext:
     
     async def init_search_factory(self):
         """Initialise la factory de recherche"""
+        from search_factory import search_factory
         self.logger.info("Initialisation de la factory de recherche")
         try:
             # Initialisation de la factory de recherche
@@ -175,6 +174,7 @@ class ApplicationContext:
     
     async def init_chatbot(self):
         """Initialise le chatbot"""
+        from chatbot import ChatBot
         self.logger.info("Initialisation du chatbot")
         try:
             # Récupération des clés nécessaires depuis les variables d'environnement

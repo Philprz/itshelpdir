@@ -1,0 +1,210 @@
+workspace_rules:
+  - name: "Handle User Query"
+    description: "Process user queries and generate responses based on the analysis and detected intentions, with standardized interfaces and robust error handling."
+    conditions:
+      - type: "message_received"
+        platform: "web"
+    actions:
+      - type: "initialize_session"
+        description: "Initialize the session for the user query with robust error handling."
+        parameters:
+          - name: "circuit_breaker_enabled"
+            value: true
+          - name: "fallback_enabled" 
+            value: true
+
+      - type: "extract_client_info"
+        description: "Extract client information from the message for proper routing and context."
+        parameters:
+          - name: "message"
+            value: "{{message.content}}"
+          - name: "default_client"
+            value: "UNKNOWN"
+
+      - type: "analyze_question"
+        description: "Analyze the user's question to understand the context and extract relevant information."
+        parameters:
+          - name: "question"
+            value: "{{message.content}}"
+          - name: "client"
+            value: "{{extract_client_info.output.client}}"
+
+      - type: "detect_intent"
+        description: "Detect the user's intent based on the analyzed question to guide the search process."
+        parameters:
+          - name: "question"
+            value: "{{analyze_question.output.question}}"
+          - name: "translated_question"
+            value: "{{analyze_question.output.translated_question}}"
+
+      - type: "contextual_search"
+        description: "Perform a contextual search across the relevant data sources based on the detected intent, with standardized interfaces."
+        parameters:
+          - name: "intent"
+            value: "{{detect_intent.output.intent}}"
+          - name: "client"
+            value: "{{extract_client_info.output.client}}"
+          - name: "sources"
+            value:
+              - "NETSUITE"
+              - "SAP"
+              - "NETSUITE_DUMMIES"
+              - "JIRA"
+              - "ZENDESK"
+              - "CONFLUENCE"
+          - name: "fallback_on_error"
+            value: true
+          - name: "timeout"
+            value: 15
+
+      - type: "process_search_results"
+        description: "Process and validate search results using standardized result processors."
+        parameters:
+          - name: "results"
+            value: "{{contextual_search.output.results}}"
+          - name: "format"
+            value: "standardized"
+
+      - type: "call_external_service"
+        description: "Call external services (e.g., OpenAI) to generate a response based on the search results, with circuit breaker protection."
+        parameters:
+          - name: "service"
+            value: "OpenAI"
+          - name: "model"
+            value: "{{env.OPENAI_MODEL}}"
+          - name: "prompt"
+            value: "{{process_search_results.output.formatted_results}}"
+          - name: "circuit_breaker_enabled"
+            value: true
+          - name: "timeout"
+            value: 20
+
+      - type: "generate_response"
+        description: "Generate the final response for the user based on the external service output, with proper error handling."
+        parameters:
+          - name: "response"
+            value: "{{call_external_service.output.response}}"
+          - name: "fallback_response"
+            value: "Je suis désolé, mais je ne peux pas générer une réponse complète pour le moment. Veuillez réessayer plus tard ou contacter le support technique."
+
+      - type: "format_response"
+        description: "Format the response for proper display using standardized formatters."
+        parameters:
+          - name: "response"
+            value: "{{generate_response.output.response}}"
+          - name: "client"
+            value: "{{extract_client_info.output.client}}"
+          - name: "platform"
+            value: "web"
+
+      - type: "store_in_database"
+        description: "Store the user query and the generated response in the database for future reference and analytics."
+        parameters:
+          - name: "database"
+            value: "{{env.DATABASE_TYPE}}"
+          - name: "query"
+            value: "{{message.content}}"
+          - name: "client"
+            value: "{{extract_client_info.output.client}}"
+          - name: "response"
+            value: "{{format_response.output.formatted_response}}"
+          - name: "sources_used"
+            value: "{{contextual_search.output.sources_used}}"
+          - name: "performance_metrics"
+            value: "{{contextual_search.output.metrics}}"
+
+      - type: "log_transaction"
+        description: "Log the transaction details for monitoring and debugging with structured logging."
+        parameters:
+          - name: "log_level"
+            value: "{{env.LOG_LEVEL}}"
+          - name: "transaction_id"
+            value: "{{session.id}}"
+          - name: "client"
+            value: "{{extract_client_info.output.client}}"
+          - name: "metrics"
+            value:
+              - "{{contextual_search.output.metrics}}"
+              - "{{call_external_service.output.metrics}}"
+
+      - type: "send_response"
+        description: "Send the formatted response back to the user via the web interface."
+        parameters:
+          - name: "response"
+            value: "{{format_response.output.formatted_response}}"
+          - name: "platform"
+            value: "web"
+          - name: "with_metrics"
+            value: "{{env.INCLUDE_METRICS_IN_RESPONSE}}"
+
+  - name: "System Health Check"
+    description: "Regularly monitor the health of all components and services."
+    conditions:
+      - type: "scheduled"
+        schedule: "*/15 * * * *"  # Every 15 minutes
+    actions:
+      - type: "check_service_health"
+        description: "Check the health status of all services and components."
+        parameters:
+          - name: "services"
+            value:
+              - "openai"
+              - "qdrant"
+              - "translation"
+              - "embedding"
+              - "database"
+
+      - type: "reset_circuit_breakers"
+        description: "Reset circuit breakers if necessary based on health check results."
+        parameters:
+          - name: "health_results"
+            value: "{{check_service_health.output.results}}"
+          - name: "force_reset"
+            value: false
+
+      - type: "log_health_report"
+        description: "Log the health check results for monitoring and alerting."
+        parameters:
+          - name: "report"
+            value: "{{check_service_health.output.full_report}}"
+          - name: "alert_on_failure"
+            value: true
+
+  - name: "Cache Management"
+    description: "Manage caching for improved performance and resource utilization."
+    conditions:
+      - type: "scheduled"
+        schedule: "0 */4 * * *"  # Every 4 hours
+    actions:
+      - type: "analyze_cache_usage"
+        description: "Analyze cache usage patterns to optimize performance."
+        parameters:
+          - name: "cache_types"
+            value:
+              - "embedding"
+              - "translation"
+              - "search_results"
+
+      - type: "prune_cache"
+        description: "Remove infrequently used items from cache based on analysis."
+        parameters:
+          - name: "threshold"
+            value: "{{env.CACHE_PRUNE_THRESHOLD}}"
+          - name: "usage_data"
+            value: "{{analyze_cache_usage.output.usage_data}}"
+
+      - type: "warm_cache"
+        description: "Pre-load frequently used items into cache for improved response times."
+        parameters:
+          - name: "frequent_items"
+            value: "{{analyze_cache_usage.output.frequent_items}}"
+          - name: "threshold"
+            value: "{{env.CACHE_WARM_THRESHOLD}}"
+
+      - type: "log_cache_operations"
+        description: "Log cache management operations for monitoring."
+        parameters:
+          - name: "operations"
+            value:
+              - "{{prune_cache.output.operations}}"
+              - "{{warm_cache.output.operations}}"

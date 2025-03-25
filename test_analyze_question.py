@@ -29,6 +29,8 @@ logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Import des modules après chargement des variables d'environnement
+# L'importation se fait ici pour éviter les problèmes de dépendances circulaires
+# Le commentaire noqa est utilisé pour désactiver le warning du linter (convention du projet)
 from chatbot import ChatBot  # noqa: E402
 
 async def test_chatbot_direct(question: str, format_json: bool = False, verbose: bool = False, 
@@ -309,8 +311,8 @@ async def test_chatbot_direct(question: str, format_json: bool = False, verbose:
                                 print("\nPayload: None")
                             
                             print('-' * 50)
-                        except Exception as e:
-                            print(f"Erreur pendant l'analyse du résultat Zendesk: {str(e)}")
+                        except Exception as error:
+                            print(f"Erreur pendant l'analyse du résultat Zendesk: {str(error)}")
                             print('-' * 50)
                 else:
                     print("Aucun résultat Zendesk trouvé dans les données.")
