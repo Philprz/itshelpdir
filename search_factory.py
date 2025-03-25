@@ -202,12 +202,13 @@ class SearchClientFactory:
         self.initialized = True
         return
 
-    async def get_client(self, source_type: str):
+    async def get_client(self, source_type: str, collection_name=None):
         """
         Récupère ou crée un client de recherche pour le type demandé.
 
         Args:
             source_type: Type de source de données ('jira', 'zendesk', etc.)
+            collection_name: Nom de la collection (facultatif)
 
         Returns:
             Client de recherche correspondant ou None si non pris en charge
@@ -270,21 +271,37 @@ class SearchClientFactory:
             return None
 
         # Récupération de la collection
-        collection_name = self.default_collections.get(source_type)
+        collection_name = self.default_collections.get(source_type) if not collection_name else collection_name
         if not collection_name:
             self.logger.warning(f"Pas de collection configurée pour {source_type}")
             return None
 
+        # Conversion du nom de collection en majuscules pour correspondre aux collections réelles
+        collection_name_upper = collection_name.upper()
+        self.logger.info(f"Conversion du nom de collection '{collection_name}' en '{collection_name_upper}'")
+            
         # Création du client avec circuit breaker
         try:
             client_class = client_types[source_type]
+            self.logger.info(f"Création d'un client {client_class.__name__} pour la collection {collection_name_upper}")
+            
+            # Vérification de l'état des services requis
+            if not self.qdrant_client:
+                self.logger.error(f"Client Qdrant non initialisé, impossible de créer le client {source_type}")
+                return None
+                
+            if not self.embedding_service:
+                self.logger.error(f"Service d'embeddings non initialisé, impossible de créer le client {source_type}")
+                return None
+            
+            # Création du client avec tous les services requis
             client = client_class(
-                collection_name=collection_name,
+                collection_name=collection_name_upper,
                 qdrant_client=self.qdrant_client,
                 embedding_service=self.embedding_service,
                 translation_service=self.translation_service
             )
-
+            
             # Test minimal du client
             # Ce serait bien d'avoir une méthode health() sur chaque client
             
@@ -298,117 +315,6 @@ class SearchClientFactory:
             self.logger.error(f"Erreur création client {source_type}: {str(e)}")
             return None
 
-    async def _initialize_qdrant_client(self):
-        """Initialise le client Qdrant avec gestion d'erreurs robuste."""
-        try:
-            # Vérifier si le circuit qdrant est fermé
-            if self.circuit_breakers["qdrant"].can_execute():
-                try:
-                    # Configuration complète du client
-                    from qdrant_client import QdrantClient
-                    qdrant_url = os.getenv('QDRANT_URL')
-                    qdrant_api_key = os.getenv('QDRANT_API_KEY')
-                    
-                    if not qdrant_url:
-                        raise ValueError("Variable d'environnement QDRANT_URL non définie")
-                    
-                    self.logger.info(f"Connexion à Qdrant: {qdrant_url}")
-                    self.qdrant_client = QdrantClient(
-                        url=qdrant_url,
-                        api_key=qdrant_api_key,
-                        timeout=30  # Timeout augmenté
-                    )
-                    
-                    # Test de connexion
-                    collections = self.qdrant_client.get_collections()
-                    self.logger.info(f"Connexion Qdrant réussie. Collections disponibles: {len(collections.collections) if hasattr(collections, 'collections') else 'inconnu'}")
-                    self.circuit_breakers["qdrant"].record_success()
-                    
-                except Exception as e:
-                    self.circuit_breakers["qdrant"].record_failure()
-                    self.logger.error(f"Erreur connexion Qdrant: {str(e)}")
-                    raise
-            else:
-                self.logger.warning("Circuit Qdrant ouvert, utilisation du client minimal")
-                
-        except Exception as e:
-            self.logger.error(f"Erreur d'initialisation Qdrant, création d'un client minimal: {str(e)}")
-            
-        # Créer un client minimal en cas d'échec (toujours, pour garantir un fallback)
-        if not self.qdrant_client:
-            self.logger.warning("Utilisation d'un client Qdrant minimal (fallback)")
-            # Création d'un objet qui implémente les méthodes minimales requises
-            from types import SimpleNamespace
-            self.qdrant_client = SimpleNamespace()
-            self.qdrant_client.get_collections = lambda: SimpleNamespace(collections=[])
-            self.qdrant_client.search = lambda **kwargs: []
-            
-    async def _initialize_openai_client(self):
-        """Initialise le client OpenAI avec gestion d'erreurs robuste."""
-        try:
-            # Vérifier si le circuit openai est fermé
-            if self.circuit_breakers["openai"].can_execute():
-                try:
-                    # Configuration complète du client
-                    from openai import AsyncOpenAI
-                    openai_api_key = os.getenv('OPENAI_API_KEY')
-                    
-                    if not openai_api_key:
-                        raise ValueError("Variable d'environnement OPENAI_API_KEY non définie")
-                    
-                    self.logger.info("Initialisation du client OpenAI")
-                    self.openai_client = AsyncOpenAI(
-                        api_key=openai_api_key,
-                        timeout=30.0  # Timeout explicite
-                    )
-                    
-                    # Un test simple serait idéal ici, mais nous le ferons lors de la première utilisation
-                    self.circuit_breakers["openai"].record_success()
-                    
-                except Exception as e:
-                    self.circuit_breakers["openai"].record_failure()
-                    self.logger.error(f"Erreur initialisation OpenAI client: {str(e)}")
-                    raise
-            else:
-                self.logger.warning("Circuit OpenAI ouvert, utilisation du client minimal")
-                
-        except Exception as e:
-            self.logger.error(f"Erreur d'initialisation OpenAI, création d'un client minimal: {str(e)}")
-            
-        # Créer un client minimal en cas d'échec (toujours, pour garantir un fallback)
-        if not self.openai_client:
-            self.logger.warning("Utilisation d'un client OpenAI minimal (fallback)")
-            # Création d'un client avec une clé factice
-            self.openai_client = AsyncOpenAI(api_key="dummy-key-for-fallback-initialization")
-            
-    async def _initialize_services(self):
-        """Initialise les services d'embedding et de traduction."""
-        try:
-            # Import des classes en local pour éviter les problèmes d'import circulaire
-            from embedding_service import EmbeddingService
-            from translation_service import TranslationService
-                
-            if not self.embedding_service:
-                self.embedding_service = EmbeddingService(
-                    openai_client=self.openai_client,
-                    model='text-embedding-ada-002',
-                    l2_cache=global_cache
-                )
-                
-            if not self.translation_service:
-                self.translation_service = TranslationService(
-                    openai_client=self.openai_client,
-                    cache=global_cache
-                )
-                
-        except Exception as e:
-            self.logger.error(f"Erreur initialisation des services: {str(e)}")
-            # Création de services minimaux en cas d'échec
-            if not self.embedding_service:
-                self.embedding_service = self._create_fallback_embedding_service()
-            if not self.translation_service:
-                self.translation_service = self._create_fallback_translation_service()
-    
     async def _initialize_client(self, client_type: str, collection_name: str, fallback_enabled: bool = True):
         """
         Initialise un client de recherche spécifique avec gestion des erreurs.
@@ -434,16 +340,20 @@ class SearchClientFactory:
             if not client_class:
                 self.logger.error(f"Type de client inconnu: {client_type}")
                 return None
+            
+            # Convertir le nom de collection en majuscules pour correspondre aux collections réelles
+            collection_name_upper = collection_name.upper()
+            self.logger.info(f"Conversion du nom de collection '{collection_name}' en '{collection_name_upper}'")
                 
             # Créer l'instance avec les paramètres appropriés
             client = client_class(
-                collection_name=collection_name,
+                collection_name=collection_name_upper,
                 qdrant_client=self.qdrant_client,
                 embedding_service=self.embedding_service,
                 translation_service=self.translation_service
             )
             
-            self.logger.info(f"Client {client_type} initialisé avec succès (collection: {collection_name})")
+            self.logger.info(f"Client {client_type} initialisé avec succès (collection: {collection_name_upper})")
             return client
             
         except ImportError as e:
@@ -561,6 +471,117 @@ class SearchClientFactory:
             cb.reset()
         return {"status": "reset", "count": len(self.circuit_breakers)}
 
+    async def _initialize_qdrant_client(self):
+        """Initialise le client Qdrant avec gestion d'erreurs robuste."""
+        try:
+            # Vérifier si le circuit qdrant est fermé
+            if self.circuit_breakers["qdrant"].can_execute():
+                try:
+                    # Configuration complète du client
+                    from qdrant_client import QdrantClient
+                    qdrant_url = os.getenv('QDRANT_URL')
+                    qdrant_api_key = os.getenv('QDRANT_API_KEY')
+                    
+                    if not qdrant_url:
+                        raise ValueError("Variable d'environnement QDRANT_URL non définie")
+                    
+                    self.logger.info(f"Connexion à Qdrant: {qdrant_url}")
+                    self.qdrant_client = QdrantClient(
+                        url=qdrant_url,
+                        api_key=qdrant_api_key,
+                        timeout=30  # Timeout augmenté
+                    )
+                    
+                    # Test de connexion
+                    collections = self.qdrant_client.get_collections()
+                    self.logger.info(f"Connexion Qdrant réussie. Collections disponibles: {len(collections.collections) if hasattr(collections, 'collections') else 'inconnu'}")
+                    self.circuit_breakers["qdrant"].record_success()
+                    
+                except Exception as e:
+                    self.circuit_breakers["qdrant"].record_failure()
+                    self.logger.error(f"Erreur connexion Qdrant: {str(e)}")
+                    raise
+            else:
+                self.logger.warning("Circuit Qdrant ouvert, utilisation du client minimal")
+                
+        except Exception as e:
+            self.logger.error(f"Erreur d'initialisation Qdrant, création d'un client minimal: {str(e)}")
+            
+        # Créer un client minimal en cas d'échec (toujours, pour garantir un fallback)
+        if not self.qdrant_client:
+            self.logger.warning("Utilisation d'un client Qdrant minimal (fallback)")
+            # Création d'un objet qui implémente les méthodes minimales requises
+            from types import SimpleNamespace
+            self.qdrant_client = SimpleNamespace()
+            self.qdrant_client.get_collections = lambda: SimpleNamespace(collections=[])
+            self.qdrant_client.search = lambda **kwargs: []
+            
+    async def _initialize_openai_client(self):
+        """Initialise le client OpenAI avec gestion d'erreurs robuste."""
+        try:
+            # Vérifier si le circuit openai est fermé
+            if self.circuit_breakers["openai"].can_execute():
+                try:
+                    # Configuration complète du client
+                    from openai import AsyncOpenAI
+                    openai_api_key = os.getenv('OPENAI_API_KEY')
+                    
+                    if not openai_api_key:
+                        raise ValueError("Variable d'environnement OPENAI_API_KEY non définie")
+                    
+                    self.logger.info("Initialisation du client OpenAI")
+                    self.openai_client = AsyncOpenAI(
+                        api_key=openai_api_key,
+                        timeout=30.0  # Timeout explicite
+                    )
+                    
+                    # Un test simple serait idéal ici, mais nous le ferons lors de la première utilisation
+                    self.circuit_breakers["openai"].record_success()
+                    
+                except Exception as e:
+                    self.circuit_breakers["openai"].record_failure()
+                    self.logger.error(f"Erreur initialisation OpenAI client: {str(e)}")
+                    raise
+            else:
+                self.logger.warning("Circuit OpenAI ouvert, utilisation du client minimal")
+                
+        except Exception as e:
+            self.logger.error(f"Erreur d'initialisation OpenAI, création d'un client minimal: {str(e)}")
+            
+        # Créer un client minimal en cas d'échec (toujours, pour garantir un fallback)
+        if not self.openai_client:
+            self.logger.warning("Utilisation d'un client OpenAI minimal (fallback)")
+            # Création d'un client avec une clé factice
+            self.openai_client = AsyncOpenAI(api_key="dummy-key-for-fallback-initialization")
+            
+    async def _initialize_services(self):
+        """Initialise les services d'embedding et de traduction."""
+        try:
+            # Import des classes en local pour éviter les problèmes d'import circulaire
+            from embedding_service import EmbeddingService
+            from translation_service import TranslationService
+                
+            if not self.embedding_service:
+                self.embedding_service = EmbeddingService(
+                    openai_client=self.openai_client,
+                    model='text-embedding-ada-002',
+                    l2_cache=global_cache
+                )
+                
+            if not self.translation_service:
+                self.translation_service = TranslationService(
+                    openai_client=self.openai_client,
+                    cache=global_cache
+                )
+                
+        except Exception as e:
+            self.logger.error(f"Erreur initialisation des services: {str(e)}")
+            # Création de services minimaux en cas d'échec
+            if not self.embedding_service:
+                self.embedding_service = self._create_fallback_embedding_service()
+            if not self.translation_service:
+                self.translation_service = self._create_fallback_translation_service()
+                
     def _create_fallback_qdrant_client(self):
         """
         Crée un client Qdrant de fallback qui implémente l'interface minimale requise.

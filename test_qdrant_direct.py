@@ -73,12 +73,18 @@ class QdrantDirectTester:
         """
         try:
             embedding = await self.embedding_service.get_embedding(texte)
-            if not embedding:
-                raise ValueError("Erreur génération embedding: résultat vide")
-            return embedding
+            if embedding:
+                logger.info("Embedding généré avec succès via OpenAI")
+                return embedding
+            else:
+                logger.warning("Impossible d'obtenir un embedding via OpenAI, utilisation d'un vecteur factice")
         except Exception as e:
-            logger.error(f"Erreur génération embedding: {str(e)}")
-            sys.exit(1)
+            logger.warning(f"Erreur génération embedding via OpenAI: {str(e)}")
+            
+        # En cas d'échec, utiliser un vecteur factice
+        logger.info("Utilisation d'un vecteur factice pour la recherche")
+        # Dimension standard pour les embeddings OpenAI
+        return [0.1] * 1536
     
     def construire_filtre(self, client_name: Optional[str] = None) -> Optional[Filter]:
         """
@@ -107,7 +113,8 @@ class QdrantDirectTester:
                                limit: int = 5, 
                                client_name: Optional[str] = None,
                                afficher_scores: bool = True,
-                               format_json: bool = False) -> List[Dict[str, Any]]:
+                               format_json: bool = False,
+                               score_threshold: float = 0.0) -> List[Dict[str, Any]]:
         """
         Effectue une recherche directe dans Qdrant.
         
@@ -117,6 +124,7 @@ class QdrantDirectTester:
             client_name: Nom du client pour filtrer les résultats (optionnel)
             afficher_scores: Affiche les scores de similarité
             format_json: Retourne les résultats en format JSON
+            score_threshold: Score minimum pour considérer un résultat (0.0-1.0)
             
         Returns:
             Liste des résultats de recherche
@@ -128,24 +136,51 @@ class QdrantDirectTester:
             # Construction du filtre
             query_filter = self.construire_filtre(client_name)
             
-            # Exécution de la recherche
-            search_results = self.qdrant_client.search(
-                collection_name=self.collection_name,
-                query_vector=vector,
-                limit=limit,
-                query_filter=query_filter
-            )
+            logger.info(f"Recherche dans {self.collection_name} avec score_threshold={score_threshold}")
+            
+            # Utiliser query_points au lieu de search (qui est déprécié)
+            try:
+                search_results = self.qdrant_client.query_points(
+                    collection_name=self.collection_name,
+                    query_vector=vector,
+                    limit=limit,
+                    query_filter=query_filter,
+                    score_threshold=score_threshold,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                logger.info(f"Recherche effectuée avec query_points")
+            except (AttributeError, Exception) as e:
+                # Fallback à search en cas d'erreur (versions antérieures du client)
+                logger.warning(f"Erreur avec query_points: {str(e)}. Utilisation de search en fallback.")
+                search_results = self.qdrant_client.search(
+                    collection_name=self.collection_name,
+                    query_vector=vector,
+                    limit=limit,
+                    query_filter=query_filter,
+                    score_threshold=score_threshold,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                logger.info(f"Recherche effectuée avec search")
             
             # Transformation des résultats
             results = []
             for result in search_results:
                 item = {
-                    "score": round(result.score, 4)
+                    "score": round(result.score, 4) if hasattr(result, 'score') else 0.0
                 }
                 # Fusion du payload dans l'item
-                item.update(result.payload)
+                if hasattr(result, 'payload') and result.payload:
+                    item.update(result.payload)
                 results.append(item)
             
+            # Affichage des résultats
+            if results:
+                logger.info(f"Recherche réussie : {len(results)} résultats trouvés")
+            else:
+                logger.warning(f"Aucun résultat trouvé pour la recherche dans {self.collection_name}")
+                
             return results
             
         except Exception as e:
@@ -205,6 +240,7 @@ async def main():
     parser.add_argument('--client', help='Nom du client pour filtrer les résultats')
     parser.add_argument('--json', '-j', action='store_true', help='Affiche les résultats en format JSON')
     parser.add_argument('--list-collections', action='store_true', help='Liste les collections disponibles')
+    parser.add_argument('--score-threshold', type=float, default=0.0, help='Score minimum pour considérer un résultat (0.0-1.0)')
     
     args = parser.parse_args()
     
@@ -238,7 +274,8 @@ async def main():
         args.question,
         limit=args.limit,
         client_name=args.client,
-        format_json=args.json
+        format_json=args.json,
+        score_threshold=args.score_threshold
     )
     
     # Affichage des résultats

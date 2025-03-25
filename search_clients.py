@@ -218,9 +218,18 @@ class ERPSearchClient(AbstractSearchClient):
             score = self.processor.extract_score(result)
 
             if not payload.get('title') or not payload.get('content'):
+                # Log plus verbeux pour comprendre pourquoi le résultat est invalide
+                logger.debug(f"Résultat ERP invalide - champs manquants: {list(payload.keys())}")
                 return False
 
-            return score >= 0.4
+            # Abaissement du seuil à 0.25 pour correspondre à la stratégie globale du chatbot
+            min_score = 0.25
+            is_valid = score >= min_score
+            
+            if not is_valid:
+                logger.debug(f"Résultat ERP invalide - score trop bas: {score} < {min_score}")
+            
+            return is_valid
 
         except Exception as e:
             logger.error(f"Erreur validation résultat ERP: {str(e)}")
@@ -282,6 +291,9 @@ class ERPSearchClient(AbstractSearchClient):
 class NetsuiteSearchClient(ERPSearchClient):
     """Client de recherche spécialisé pour les documents NetSuite."""
 
+    def __init__(self, collection_name, qdrant_client, embedding_service, translation_service=None):
+        super().__init__(collection_name, qdrant_client, embedding_service, translation_service)
+        
     def get_source_prefix(self) -> str:
         return "NETSUITE"
 
@@ -289,6 +301,9 @@ class NetsuiteSearchClient(ERPSearchClient):
 class SapSearchClient(ERPSearchClient):
     """Client de recherche spécialisé pour les documents SAP."""
 
+    def __init__(self, collection_name, qdrant_client, embedding_service, translation_service=None):
+        super().__init__(collection_name, qdrant_client, embedding_service, translation_service)
+        
     def get_source_prefix(self) -> str:
         return "SAP"
 class ConfluenceSearchClient(AbstractSearchClient):

@@ -1,0 +1,13 @@
+RECOMMANDATIONS POUR LES COLLECTIONS ERP
+=======================================
+
+1. La collection NETSUITE existe avec la bonne casse. Continuez à utiliser 'NETSUITE' dans le code.
+
+2. La collection NETSUITE_DUMMIES existe avec la bonne casse. Continuez à utiliser 'NETSUITE_DUMMIES' dans le code.
+
+3. La collection SAP existe avec la bonne casse. Continuez à utiliser 'SAP' dans le code.
+
+4. Assurez-vous que tous les appels à Qdrant utilisent la méthode query_points() plutôt que search() qui est dépréciée.
+
+5. Dans la classe AbstractSearchClient, vérifiez que le nom de collection est correctement transmis aux méthodes de recherche Qdrant.
+

@@ -143,7 +143,7 @@ class ChatBot:
                 "search_strategy": {
                     "precision_required": "high/medium/low",
                     "priority_sources": ["jira", "zendesk", "confluence", "netsuite", "netsuite_dummies", "sap"],
-                    "min_score_threshold": 0.45
+                    "min_score_threshold": 0.25
                 },
                 "query": {
                     "original": "question originale",
@@ -167,9 +167,12 @@ class ChatBot:
                             client_name = test_name
                             break
             # Détection rapide des catégories
-            is_config_request = any(k in text.lower() for k in ['configur', 'paramèt', 'workflow', 'personnalis', 'custom'])
+            is_config_request = any(k in text.lower() for k in ['configur', 'paramèt', 'paramet', 'workflow', 'personnalis', 'custom', 'compte client', 'compte fournisseur'])
             is_doc_request = any(k in text.lower() for k in ['documentation', 'tutoriel', 'manuel', 'comment faire'])
             is_guide_request = any(k in text.lower() for k in ['guide', 'étape par étape', 'procédure', 'explique'])
+            
+            # Détection spécifique pour les comptes
+            is_account_config = any(k in text.lower() for k in ['compte client', 'compte fournisseur', 'paramétrer le compte', 'paramétrer un compte', 'configurer le compte', 'configurer un compte'])
             
             # Appel à OpenAI pour analyse complète
             response = await self.openai_client.chat.completions.create(
@@ -191,10 +194,17 @@ class ChatBot:
                 return self._fallback_analysis(text, is_config_request, is_doc_request)
                 
             # Ajustement en fonction de la détection rapide
-            if is_config_request and analysis['type'] != 'configuration':
+            if (is_config_request or is_account_config) and analysis['type'] != 'configuration':
                 analysis['type'] = 'configuration'
                 if 'search_strategy' in analysis:
                     analysis['search_strategy']['priority_sources'] = ['netsuite', 'sap', 'netsuite_dummies']
+            
+            # Force l'utilisation des collections spécifiques pour les comptes clients
+            if is_account_config:
+                analysis['type'] = 'configuration'  # Force le type à configuration
+                if 'search_strategy' in analysis:
+                    analysis['search_strategy']['priority_sources'] = ['netsuite', 'netsuite_dummies', 'sap']
+                    analysis['search_strategy']['min_score_threshold'] = 0.25  # Abaisse le seuil pour obtenir plus de résultats
             
             if is_doc_request and analysis['type'] != 'documentation':
                 analysis['type'] = 'documentation'
@@ -245,7 +255,7 @@ class ChatBot:
             "search_strategy": {
                 "precision_required": "medium",
                 "priority_sources": priority_sources,
-                "min_score_threshold": 0.45
+                "min_score_threshold": 0.25
             },
             "query": {
                 "original": text,
@@ -271,24 +281,32 @@ class ChatBot:
         collection_mapping = {
             'configuration': ['netsuite', 'netsuite_dummies', 'sap'],
             'support': ['jira', 'zendesk', 'confluence'],
-            'documentation': ['confluence', 'netsuite', 'netsuite_dummies']
+            'documentation': ['confluence', 'netsuite', 'sap']
         }
         
         # Utilisation directe des sources prioritaires si définies
         if "search_strategy" in analysis and "priority_sources" in analysis["search_strategy"]:
-            return analysis["search_strategy"]["priority_sources"]
+            sources = analysis["search_strategy"]["priority_sources"]
+            self.logger.info(f"Collections déterminées par priority_sources: {sources}")
+            return sources
             
         # Vérification spécifique pour les tickets
         if "tickets" in analysis.get('query', {}).get('original','').lower():
+            self.logger.info("Collections déterminées par mention de 'tickets': ['jira', 'zendesk', 'confluence']")
             return ['jira', 'zendesk', 'confluence']
             
         # Détermination selon le type de requête
         query_type = (analysis.get('type','') or '').lower()
+        self.logger.info(f"Type de requête détecté: {query_type}")
         if query_type in collection_mapping:
-            return collection_mapping[query_type]
+            sources = collection_mapping[query_type]
+            self.logger.info(f"Collections déterminées par type de requête '{query_type}': {sources}")
+            return sources
             
         # Par défaut, retourner toutes les collections
-        return list(self.collections.keys())
+        all_collections = list(self.collections.keys())
+        self.logger.info(f"Collections par défaut (toutes): {all_collections}")
+        return all_collections
     
     async def recherche_coordonnee(self, collections: List[str], question: str, client_info: Optional[Dict] = None,
                            date_debut: Optional[Any] = None, date_fin: Optional[Any] = None) -> List[Any]:
@@ -318,14 +336,28 @@ class ChatBot:
         # Récupération des clients de recherche
         clients = {}
         for collection in collections:
-            client = await search_factory.get_client(collection)
-            if client:
-                clients[collection] = client
-
+            # Convertir le nom de collection en type de source (minuscules)
+            source_type = collection.lower()
+            self.logger.info(f"Demande du client pour source_type={source_type} (collection={collection})")
+            
+            client = await search_factory.get_client(source_type)
+            if client and not isinstance(client, Exception):
+                try:
+                    # Test simple pour vérifier si c'est un client valide
+                    if hasattr(client, 'recherche_intelligente'):
+                        clients[source_type] = client
+                        self.logger.info(f"Client récupéré pour {source_type}: {type(client).__name__}")
+                    else:
+                        self.logger.warning(f"Client sans méthode recherche_intelligente pour {source_type}: {type(client).__name__}")
+                except Exception as e:
+                    self.logger.error(f"Erreur lors de la vérification client pour {source_type}: {str(e)}")
+            else:
+                self.logger.error(f"Client non disponible pour source_type {source_type}")
+            
         if not clients:
-            self.logger.error("Aucun client de recherche disponible")
+            self.logger.error("Aucun client de recherche disponible pour cette requête.")
             return []
-
+        
         results = []
 
         # Détection de la stratégie de recherche et priorisation des sources
@@ -380,58 +412,81 @@ class ChatBot:
 
             if isinstance(item, tuple) and len(item) == 2:
                 source_type, res = item
+                self.logger.info(f"Traitement des résultats de {source_type}: {len(res)} résultats")
                 results_by_source[source_type] = len(res)
 
                 # Marquage de la source dans les résultats
                 for r in res:
+                    # Log détaillé pour comprendre la structure
+                    self.logger.info(f"Résultat de {source_type}: score={getattr(r, 'score', 0)}")
+                    
+                    # Ajout d'un attribut source_type directement sur l'objet résultat
+                    setattr(r, 'source_type', source_type)
+                    
                     if hasattr(r, 'payload'):
-                        if isinstance(r.payload, dict):
-                            r.payload['source_type'] = source_type
-                        else:
-                            # Cas où payload est un objet Python
-                            try:
+                        try:
+                            if isinstance(r.payload, dict):
+                                r.payload['source_type'] = source_type
+                            elif hasattr(r.payload, '__dict__'):
                                 r.payload.__dict__['source_type'] = source_type
-                            except (AttributeError, TypeError):
-                                # Si payload n'est pas un objet avec __dict__, créer un nouveau payload
+                            else:
+                                # Si payload n'est pas un dictionnaire ou un objet avec __dict__
                                 old_payload = r.payload
                                 r.payload = {'source_type': source_type, 'original_payload': old_payload}
+                        except Exception as e:
+                            self.logger.warning(f"Erreur lors de l'ajout du source_type au payload: {str(e)}")
+                    
+                    # Ajouter le résultat à la liste combinée
+                    combined_results.append(r)
 
-                    combined_results.extend(res)
-
-        # Tri des résultats par score et déduplication
+        # Tri des résultats par score
+        self.logger.info(f"Nombre de résultats combinés avant tri et déduplication: {len(combined_results)}")
+        
+        if not combined_results:
+            self.logger.warning("Aucun résultat trouvé dans les collections")
+            return []
+            
+        # Tri des résultats par score (du plus élevé au plus bas)
         combined_results.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
 
-        # Déduplication basée sur le contenu
-        seen = {}
+        # Déduplication simplifiée pour éviter de perdre des résultats
+        # On ne garde que les doublons exacts, basés sur des identifiants
+        dedup_results = []
+        seen_ids = set()
+        
         for res in combined_results:
-            if not hasattr(res, 'payload'):
-                continue
-
-            # Extraction des champs communs avec fallbacks
+            # Extraction de l'ID unique pour déduplication
+            res_id = None
             try:
-                if isinstance(res.payload, dict):
-                    payload = res.payload
-                else:
-                    payload = res.payload.__dict__ if hasattr(res.payload, '__dict__') else {}
-
-                content = str(payload.get('content', '') or payload.get('text', '') or "Pas de contenu")
+                if hasattr(res, 'id'):
+                    res_id = str(res.id)
+                elif hasattr(res, 'payload') and isinstance(res.payload, dict) and 'id' in res.payload:
+                    res_id = str(res.payload['id'])
+                elif hasattr(res, 'payload') and hasattr(res.payload, 'id'):
+                    res_id = str(res.payload.id)
             except Exception:
-                content = "content_extraction_failed"
-
-            # Utilisation d'un hash du contenu pour la déduplication
-            content_hash = hashlib.md5(content[:500].encode('utf-8', errors='ignore')).hexdigest()
-
-            if content_hash not in seen or res.score > seen[content_hash].score:
-                seen[content_hash] = res
-
+                res_id = None
+                
+            # Si aucun ID n'est trouvé, on utilise l'objet lui-même
+            if not res_id:
+                res_id = id(res)
+                
+            # Si cet ID n'a pas été vu, on l'ajoute aux résultats dédupliqués
+            if res_id not in seen_ids:
+                seen_ids.add(res_id)
+                dedup_results.append(res)
+                
+        self.logger.info(f"Nombre de résultats après déduplication: {len(dedup_results)}")
+        
         # Conversion en liste et limitation
-        final_results = list(seen.values())
+        final_results = dedup_results
         final_results.sort(key=lambda x: getattr(x, 'score', 0), reverse=True)
-
+        
+        # Calcul du temps total d'exécution
         total_time = time.monotonic() - start_time
         self.logger.info(f"Recherche terminée en {total_time:.2f}s - Résultats par source: {results_by_source}")
         self.logger.info(f"Total dédupliqué: {len(final_results)} résultats")
-
+        
         # Sauvegarde des résultats pour les actions ultérieures
         self._last_search_results = final_results[:5]
 
@@ -531,6 +586,10 @@ class ChatBot:
         for r in results:
             try:
                 source_type = self._detect_source_type(r)
+                
+                # Log détaillé des résultats
+                self.logger.info(f"Résultat de {source_type}: score={getattr(r, 'score', 0)}")
+                
                 if source_type:
                     source_types[source_type] = source_types.get(source_type, 0) + 1
             except Exception as e:
@@ -581,6 +640,10 @@ class ChatBot:
             source_client = await search_factory.get_client(source_type)
             if source_client:
                 source_clients[source_type] = source_client
+
+        if not source_clients:
+            self.logger.error("Aucun client de recherche disponible")
+            return []
 
         # Mode de formatage progressif si activé
         if progressive:
