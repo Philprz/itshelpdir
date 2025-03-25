@@ -128,7 +128,8 @@ class SearchClientFactory:
             'confluence': os.getenv('QDRANT_COLLECTION_CONFLUENCE', 'CONFLUENCE'),
             'netsuite': os.getenv('QDRANT_COLLECTION_NETSUITE', 'NETSUITE'),
             'netsuite_dummies': os.getenv('QDRANT_COLLECTION_NETSUITE_DUMMIES', 'NETSUITE_DUMMIES'),
-            'sap': os.getenv('QDRANT_COLLECTION_SAP', 'SAP')
+            'sap': os.getenv('QDRANT_COLLECTION_SAP', 'SAP'),
+            'erp': os.getenv('QDRANT_COLLECTION_ERP', 'ERP')
         }
 
     async def initialize(self):
@@ -240,7 +241,8 @@ class SearchClientFactory:
                     ConfluenceSearchClient,
                     NetsuiteSearchClient,
                     NetsuiteDummiesSearchClient,
-                    SapSearchClient
+                    SapSearchClient,
+                    ERPSearchClient
                 )
 
                 # Création des mappings vers les classes
@@ -250,7 +252,8 @@ class SearchClientFactory:
                     'confluence': ConfluenceSearchClient,
                     'netsuite': NetsuiteSearchClient,
                     'netsuite_dummies': NetsuiteDummiesSearchClient,
-                    'sap': SapSearchClient
+                    'sap': SapSearchClient,
+                    'erp': ERPSearchClient
                 }
                 self.circuit_breakers["client_import"].record_success()
                 return client_types
@@ -395,7 +398,6 @@ class SearchClientFactory:
             if not self.translation_service:
                 self.translation_service = TranslationService(
                     openai_client=self.openai_client,
-                    model='gpt-3.5-turbo',
                     cache=global_cache
                 )
                 
@@ -510,7 +512,8 @@ class SearchClientFactory:
             ConfluenceSearchClient,
             NetsuiteSearchClient,
             NetsuiteDummiesSearchClient,
-            SapSearchClient
+            SapSearchClient,
+            ERPSearchClient
         )
 
         # Création des mappings vers les classes
@@ -520,7 +523,8 @@ class SearchClientFactory:
             'confluence': ConfluenceSearchClient,
             'netsuite': NetsuiteSearchClient,
             'netsuite_dummies': NetsuiteDummiesSearchClient,
-            'sap': SapSearchClient
+            'sap': SapSearchClient,
+            'erp': ERPSearchClient
         }
     
     async def _get_client_types_safe(self):
