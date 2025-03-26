@@ -378,9 +378,27 @@ class ChatBot:
                 search_limit = 10  # Nombre maximum de résultats par source
                 score_min = 0.5    # Score minimal pour un résultat pertinent
                 
+                # Extraction de la valeur client appropriée du dictionnaire client_info
+                client_value = None
+                if client_info:
+                    # Utiliser la clé correspondant au type de source si elle existe,
+                    # sinon utiliser la clé 'source' ou la première valeur disponible
+                    if source_type in client_info:
+                        client_value = client_info[source_type]
+                    elif 'source' in client_info:
+                        client_value = client_info['source']
+                    # Fallback: prendre la première valeur non-None
+                    else:
+                        for key, value in client_info.items():
+                            if value is not None:
+                                client_value = value
+                                break
+                
+                self.logger.info(f"Valeur client utilisée pour {source_type}: {client_value}")
+                
                 results = await client.recherche_intelligente(
                     question=question,
-                    client_name=client_info,
+                    client_name=client_value,  # Utiliser la valeur extraite
                     date_debut=date_debut,
                     date_fin=date_fin,
                     limit=search_limit,
