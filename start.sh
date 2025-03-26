@@ -47,6 +47,9 @@ if [ -z "$IS_RENDER" ]; then
     elif ! python -c "import gevent" &> /dev/null; then
         echo "Installation de gevent..."
         pip install gevent
+    elif ! python -c "import geventwebsocket" &> /dev/null; then
+        echo "Installation de gevent-websocket..."
+        pip install gevent-websocket==0.10.1
     fi
 else
     # Même en environnement Render, vérifier si Flask est installé
@@ -90,4 +93,4 @@ export PYTHONPATH=.
 export FLASK_APP=app.py
 
 # Augmentation du timeout à 300s (5 minutes) pour l'initialisation
-gunicorn --worker-class gevent --workers 1 --timeout 300 --graceful-timeout 60 --keep-alive 5 --log-level info 'wsgi:application' -b 0.0.0.0:${PORT:-5000}
+gunicorn --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker --workers 1 --timeout 300 --graceful-timeout 60 --keep-alive 5 --log-level info 'wsgi:application' -b 0.0.0.0:${PORT:-5000}

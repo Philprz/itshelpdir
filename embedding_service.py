@@ -76,9 +76,28 @@ class EmbeddingService:
         # Charger le cache persistant au démarrage
         self._load_cache_from_disk()
         
-        # Planifier l'évaluation périodique du cache
-        asyncio.create_task(self._schedule_cache_maintenance())
+        # Référence à la tâche de maintenance du cache
+        self._maintenance_task = None
         
+        # Planifier l'évaluation périodique du cache seulement si dans un contexte asyncio
+        try:
+            if asyncio.get_event_loop().is_running():
+                self._start_cache_maintenance()
+        except RuntimeError:
+            self.logger.warning("Aucune boucle asyncio n'est en cours d'exécution, la maintenance du cache est désactivée")
+            
+    def _start_cache_maintenance(self):
+        """Démarre la tâche de maintenance du cache si ce n'est pas déjà fait."""
+        if self._maintenance_task is None or self._maintenance_task.done():
+            self.logger.info("Démarrage de la tâche de maintenance du cache")
+            self._maintenance_task = asyncio.create_task(self._schedule_cache_maintenance())
+            
+    def stop_cache_maintenance(self):
+        """Arrête proprement la tâche de maintenance du cache."""
+        if self._maintenance_task and not self._maintenance_task.done():
+            self.logger.info("Arrêt de la tâche de maintenance du cache")
+            self._maintenance_task.cancel()
+            
     async def _schedule_cache_maintenance(self):
         """Planifie les tâches de maintenance périodiques du cache."""
         while True:
