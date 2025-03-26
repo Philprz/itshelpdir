@@ -415,10 +415,10 @@ class ChatBot:
                 elapsed = time.monotonic() - task_start_time
                 self.logger.info(f"{source_type}: {len(results)} résultats en {elapsed:.2f}s (scores: {scores_str})")
                 
-                return results
+                return (source_type, results)
             except Exception as e:
                 self.logger.error(f"Erreur recherche {source_type}: {str(e)}")
-                return []
+                return (source_type, [])
         
         # Exécution en fonction de la priorisation
         executed_sources = set()
