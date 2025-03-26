@@ -7,7 +7,6 @@ Script pour vérifier les noms des champs de vecteurs dans les collections Qdran
 """
 
 import os
-import json
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 

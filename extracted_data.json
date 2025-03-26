@@ -1,0 +1,32 @@
+{
+  "RONDOT": {
+    "jira": [
+      {
+        "payload": {
+          "client": "RONDOT",
+          "erp": "SAP",
+          "created": 1717399186,
+          "updated": 1719385092,
+          "content": "L'élément concerne une communication relative à un sujet impliquant RONDOT. Les détails spécifiques et les commentaires associés n'ont pas été fournis. Une clarification ou des informations supplémentaires seraient nécessaires pour une analyse complète.",
+          "company_name": "Rondot Group - Support",
+          "summary": "Re: RONDOT",
+          "description": "",
+          "comments": [],
+          "source_type": "JIRA",
+          "last_upserted": 1737558296,
+          "attachments_desc": "",
+          "jpg_descript": null,
+          "pdf_descript": null,
+          "id": "11188",
+          "key": "RONS-61",
+          "resolution": "Done",
+          "time_spent": 2700,
+          "assignee": "Séverine GACON",
+          "url": "https://it-spirit.atlassian.net/browse/RONS-61"
+        },
+        "score": 0.82639015,
+        "id": 11188,
+        "model_computed_fields": {},
+        "model_config": {},
+        "model_fields": {
+          "id": 

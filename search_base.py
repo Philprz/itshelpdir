@@ -303,6 +303,101 @@ class DefaultResultProcessor(AbstractResultProcessor):
         except Exception:
             return None
             
+    def extract_payload(self, result: Any) -> Dict:
+        """
+        Extrait le payload d'un résultat de recherche.
+        
+        Args:
+            result: Résultat de recherche
+            
+        Returns:
+            Dictionnaire contenant les données du payload ou dictionnaire vide en cas d'erreur
+        """
+        try:
+            # Format standard Qdrant avec attribut payload
+            if hasattr(result, 'payload'):
+                payload = result.payload
+                if isinstance(payload, dict):
+                    return payload
+                elif hasattr(payload, '__dict__'):
+                    return payload.__dict__
+                    
+            # Format dictionnaire avec clé 'payload'
+            if isinstance(result, dict) and 'payload' in result:
+                payload = result['payload']
+                if isinstance(payload, dict):
+                    return payload
+                    
+            # Si le résultat est directement un dictionnaire sans structure spécifique
+            if isinstance(result, dict) and ('score' in result or 'id' in result):
+                # On retourne une copie du dictionnaire sans les métadonnées standards
+                payload_dict = result.copy()
+                # Suppression des métadonnées qui ne font pas partie du payload
+                for key in ['score', 'id', 'vector']:
+                    if key in payload_dict:
+                        del payload_dict[key]
+                return payload_dict
+                
+            # Format objet avec attributs
+            if hasattr(result, '__dict__'):
+                attrs = result.__dict__
+                # Suppression des attributs spéciaux
+                return {k: v for k, v in attrs.items() if not k.startswith('_')}
+                
+            return {}
+        except Exception as e:
+            logger.error(f"Erreur lors de l'extraction du payload: {str(e)}")
+            return {}
+    
+    def normalize_date(self, date_value: Any) -> str:
+        """
+        Normalise une date en format string.
+        
+        Args:
+            date_value: Date sous différents formats possibles (timestamp, iso, string)
+            
+        Returns:
+            Date normalisée au format YYYY-MM-DD ou N/A si la date est invalide
+        """
+        try:
+            if not date_value:
+                return 'N/A'
+                
+            # Conversion du type de date selon le format
+            if isinstance(date_value, (int, float)):
+                # Timestamp en secondes
+                return datetime.fromtimestamp(date_value, tz=timezone.utc).strftime("%Y-%m-%d")
+                
+            if isinstance(date_value, datetime):
+                # Objet datetime
+                return date_value.strftime("%Y-%m-%d")
+                
+            if isinstance(date_value, str):
+                # Format ISO
+                if 'T' in date_value:
+                    try:
+                        return datetime.fromisoformat(date_value.replace('Z', '+00:00')).strftime("%Y-%m-%d")
+                    except ValueError:
+                        pass
+                
+                # Format timestamp en string
+                if date_value.isdigit():
+                    try:
+                        return datetime.fromtimestamp(float(date_value), tz=timezone.utc).strftime("%Y-%m-%d")
+                    except (ValueError, OverflowError):
+                        pass
+                
+                # Format YYYY-MM-DD déjà présent
+                if len(date_value) >= 10 and date_value[4] == '-' and date_value[7] == '-':
+                    return date_value[:10]
+            
+            # Autres types de date non reconnus
+            return str(date_value)[:10] if len(str(date_value)) >= 10 else 'N/A'
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de la normalisation de la date: {str(e)}")
+            return 'N/A'
+            
     def deduplicate_results(self, results: List[Any]) -> List[Any]:
         """
         Déduplique une liste de résultats par titre.
@@ -471,105 +566,166 @@ class AbstractSearchClient(ABC):
         Returns:
             Liste des résultats pertinents
         """
-        # Vérification de la question
-        if not question or not isinstance(question, str) or len(question.strip()) < 2:
-            self.logger.warning(f"Question invalide: '{question}'")
-            return []
-            
+        # Construction du filtre de recherche
+        search_filter = self._build_search_filter(client_name, date_debut, date_fin)
+        
+        # Génération du vecteur d'embedding
+        vector = None
         try:
-            # Construction du filtre pour la recherche
-            search_filter = None
-            if client_name or date_debut or date_fin:
-                search_filter = self._build_search_filter(client_name, date_debut, date_fin)
+            if hasattr(self, 'embedding_service') and self.embedding_service:
+                vector = await self.embedding_service.get_embedding(question)
+        except Exception as e:
+            self.logger.warning(f"Erreur lors de la génération de l'embedding: {str(e)}")
+            
+        # En cas d'erreur ou si aucun embedding n'est disponible, utiliser un vecteur fictif
+        if not vector:
+            self.logger.info("Utilisation d'un vecteur fictif pour la recherche")
+            # La plupart des embeddings OpenAI sont de dimension 1536
+            vector = [0.1] * 1536
+            
+        # Vérification de la classe actuelle pour éviter les problèmes d'arguments inconnus
+        # CORRECTION: Pour éviter les erreurs "Unknown arguments: ['query_vector']"
+        # Nous détectons si la classe actuelle est une sous-classe spécifique
+        # et nous appelons les bonnes méthodes adaptées à chaque type
+        try:
+            # Identification du type de client
+            client_class_name = self.__class__.__name__
+            
+            # Récupération du vrai client Qdrant si disponible
+            search_client = getattr(self, 'client', None)
+            
+            # Cas 1: Si nous sommes dans un client spécifique (Jira, Zendesk, etc)
+            if client_class_name != 'AbstractSearchClient':
+                self.logger.info(f"Utilisation de la stratégie pour client spécifique: {client_class_name}")
                 
-            # Obtention de l'embedding via OpenAI
-            vector = None
-            try:
-                if hasattr(self, 'embedding_service') and self.embedding_service:
-                    vector = await self.embedding_service.get_embedding(question)
-            except Exception as e:
-                self.logger.warning(f"Erreur lors de la génération de l'embedding: {str(e)}")
-                
-            # En cas d'erreur ou si aucun embedding n'est disponible, utiliser un vecteur fictif
-            if not vector:
-                self.logger.info("Utilisation d'un vecteur fictif pour la recherche")
-                # La plupart des embeddings OpenAI sont de dimension 1536
-                vector = [0.1] * 1536
-                
-            # Recherche avec retry en cas d'erreur
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    # Placeholder pour simuler une exécution asynchrone du client Qdrant
-                    search_task = asyncio.create_task(asyncio.sleep(0))
+                # Recherche avec filtres si nécessaire
+                if search_filter and hasattr(self, 'recherche_avec_filtres'):
+                    self.logger.info("Utilisation de recherche_avec_filtres")
+                    filtres = {
+                        'client': client_name
+                    } if client_name else {}
                     
-                    self.logger.info(f"Recherche dans {self.collection_name} (tentative {attempt+1}/{max_retries})")
+                    if date_debut or date_fin:
+                        filtres['dates'] = {'debut': date_debut, 'fin': date_fin}
                     
-                    # Utiliser query_points (méthode recommandée) avec fallback à search
+                    # Appel direct à la méthode adapter, sans utiliser search directement
+                    # Cela évite l'erreur "Unknown arguments: ['query_vector']"
+                    search_results = self.recherche_avec_filtres(
+                        query_vector=vector,
+                        filtres=filtres,
+                        limit=limit
+                    )
+                # Recherche simple sinon
+                elif hasattr(self, 'recherche_similaire'):
+                    self.logger.info("Utilisation de recherche_similaire")
+                    # Appel direct à la méthode adapter, sans utiliser search directement
+                    search_results = self.recherche_similaire(
+                        query_vector=vector,
+                        limit=limit
+                    )
+                else:
+                    self.logger.warning(f"Pas de méthode de recherche compatible pour {client_class_name}")
+                    return []
+            
+            # Cas 2: Sinon, utiliser la méthode standard de l'API Qdrant
+            elif search_client:
+                self.logger.info("Utilisation de l'API standard Qdrant")
+                # Recherche avec retry en cas d'erreur
+                max_retries = self.MAX_RETRIES
+                for attempt in range(max_retries):
                     try:
-                        if hasattr(self.client, 'query_points'):
-                            self.logger.info("Utilisation de query_points (méthode recommandée)")
-                            search_results = self.client.query_points(
-                                collection_name=self.collection_name,
-                                query_vector=vector,
-                                query_filter=search_filter,
-                                limit=limit,
-                                with_payload=True,
-                                score_threshold=score_threshold,
-                                with_vectors=False
-                            )
-                        else:
-                            # Fallback à la méthode search (dépréciée)
-                            self.logger.info("Utilisation de search (méthode dépréciée)")
-                            search_results = self.client.search(
-                                collection_name=self.collection_name,
-                                query_vector=vector,
-                                query_filter=search_filter,
-                                limit=limit,
-                                with_payload=True,
-                                score_threshold=score_threshold,
-                                with_vectors=False
-                            )
+                        # Placeholder pour simuler une exécution asynchrone du client Qdrant
+                        search_task = asyncio.create_task(asyncio.sleep(0))
                         
-                        # Log du nombre de résultats trouvés
-                        if search_results:
-                            self.logger.info(f"Recherche réussie: {len(search_results)} résultats trouvés")
-                        else:
-                            self.logger.warning(f"Aucun résultat trouvé pour '{question}' dans {self.collection_name}")
+                        self.logger.info(f"Recherche dans {self.collection_name} (tentative {attempt+1}/{max_retries})")
                         
-                        # Attente du placeholder pour simuler l'asynchronisme
-                        await asyncio.wait_for(search_task, timeout=0.2)
-                        break
-                        
-                    except Exception as e:
-                        self.logger.error(f"Erreur spécifique à la recherche: {str(e)}")
+                        # Utiliser query_points (méthode recommandée) avec fallback à search
+                        try:
+                            if hasattr(search_client, 'query_points'):
+                                self.logger.info("Utilisation de query_points (méthode recommandée)")
+                                search_results = search_client.query_points(
+                                    collection_name=self.collection_name,
+                                    query_vector=vector,
+                                    query_filter=search_filter,
+                                    limit=limit,
+                                    with_payload=True,
+                                    score_threshold=score_threshold,
+                                    with_vectors=False
+                                )
+                            else:
+                                # Fallback à la méthode search (dépréciée)
+                                self.logger.info("Utilisation de search (méthode dépréciée)")
+                                search_results = search_client.search(
+                                    collection_name=self.collection_name,
+                                    query_vector=vector,
+                                    query_filter=search_filter,
+                                    limit=limit,
+                                    with_payload=True,
+                                    score_threshold=score_threshold,
+                                    with_vectors=False
+                                )
+                            
+                            # Log du nombre de résultats trouvés
+                            if search_results:
+                                self.logger.info(f"Recherche réussie: {len(search_results)} résultats trouvés")
+                            else:
+                                self.logger.warning(f"Aucun résultat trouvé pour '{question}' dans {self.collection_name}")
+                            
+                            # Attente du placeholder pour simuler l'asynchronisme
+                            await asyncio.wait_for(search_task, timeout=0.2)
+                            break
+                            
+                        except Exception as e:
+                            self.logger.error(f"Erreur spécifique à la recherche: {str(e)}")
+                            if attempt < max_retries - 1:
+                                self.logger.info("Nouvelle tentative dans 1 seconde...")
+                                await asyncio.sleep(1)
+                            else:
+                                self.logger.error(f"Échec après {max_retries} tentatives")
+                                return []
+                            
+                    except asyncio.TimeoutError:
+                        self.logger.warning(f"Timeout de la recherche (tentative {attempt+1}/{max_retries})")
                         if attempt < max_retries - 1:
-                            self.logger.info(f"Nouvelle tentative dans 1 seconde...")
+                            self.logger.info("Nouvelle tentative dans 1 seconde...")
                             await asyncio.sleep(1)
                         else:
                             self.logger.error(f"Échec après {max_retries} tentatives")
                             return []
-                        
-                except asyncio.TimeoutError:
-                    self.logger.warning(f"Timeout de la recherche (tentative {attempt+1}/{max_retries})")
-                    if attempt < max_retries - 1:
-                        self.logger.info(f"Nouvelle tentative dans 1 seconde...")
-                        await asyncio.sleep(1)
-                    else:
-                        self.logger.error(f"Timeout après {max_retries} tentatives")
-                        return []
-            
+            else:
+                self.logger.error("Pas de client de recherche disponible")
+                return []
+        
             # Transformation et validation des résultats
             results = []
-            if hasattr(self, 'validate_result'):
+            if hasattr(self, 'valider_resultat'):
                 for result in search_results:
-                    if self.validate_result(result):
+                    if self.valider_resultat(result):
+                        # Ajouter le champ source_type au payload pour le traitement ultérieur
+                        source_type = self.get_source_name().lower() if hasattr(self, 'get_source_name') else "unknown"
+                        if hasattr(result, 'payload'):
+                            # Si payload est un dictionnaire, ajouter le champ source_type
+                            if isinstance(result.payload, dict):
+                                result.payload['source_type'] = source_type
+                            # Si payload est un objet, essayer d'ajouter l'attribut
+                            elif hasattr(result.payload, '__dict__'):
+                                result.payload.__dict__['source_type'] = source_type
                         results.append(result)
             else:
-                results = search_results
-                
+                # Même traitement pour les résultats non validés
+                source_type = self.get_source_name().lower() if hasattr(self, 'get_source_name') else "unknown"
+                for result in search_results:
+                    if hasattr(result, 'payload'):
+                        # Si payload est un dictionnaire, ajouter le champ source_type
+                        if isinstance(result.payload, dict):
+                            result.payload['source_type'] = source_type
+                        # Si payload est un objet, essayer d'ajouter l'attribut
+                        elif hasattr(result.payload, '__dict__'):
+                            result.payload.__dict__['source_type'] = source_type
+                    results.append(result)
+                    
             return results
-                
+                    
         except Exception as e:
             self.logger.error(f"Erreur lors de la recherche intelligente: {str(e)}")
             return []
@@ -590,7 +746,7 @@ class AbstractSearchClient(ABC):
         
         # Filtre sur le client si spécifié
         if client_name:
-            self.logger.info("Ajout de filtre sur le client: {}".format(client_name))
+            self.logger.info(f"Ajout de filtre sur le client: {client_name}")
             must_conditions.append(
                 FieldCondition(
                     key="client",
@@ -603,7 +759,7 @@ class AbstractSearchClient(ABC):
             date_conditions = []
             
             if date_debut:
-                self.logger.info("Ajout de filtre sur date début: {}".format(date_debut.isoformat()))
+                self.logger.info(f"Ajout de filtre sur date début: {date_debut.isoformat()}")
                 date_conditions.append(
                     FieldCondition(
                         key="date",
@@ -614,7 +770,7 @@ class AbstractSearchClient(ABC):
                 )
                 
             if date_fin:
-                self.logger.info("Ajout de filtre sur date fin: {}".format(date_fin.isoformat()))
+                self.logger.info(f"Ajout de filtre sur date fin: {date_fin.isoformat()}")
                 date_conditions.append(
                     FieldCondition(
                         key="date",
@@ -629,7 +785,7 @@ class AbstractSearchClient(ABC):
         
         # Construire le filtre final
         if must_conditions:
-            self.logger.info("Construction du filtre avec {} conditions".format(len(must_conditions)))
+            self.logger.info(f"Construction du filtre avec {len(must_conditions)} conditions")
             return Filter(
                 must=must_conditions
             )

@@ -57,7 +57,7 @@ async def test_collections():
             
             try:
                 # Test avec nom en minuscules
-                collection_info = client.get_collection(lowercase)
+                _ = client.get_collection(lowercase)  # Utilisation de _ pour ignorer le résultat
                 lowercase_exists = True
                 logger.info(f"Collection '{lowercase}' existe")
             except Exception as e:
@@ -65,7 +65,7 @@ async def test_collections():
             
             try:
                 # Test avec nom en majuscules
-                collection_info = client.get_collection(uppercase)
+                _ = client.get_collection(uppercase)  # Utilisation de _ pour ignorer le résultat
                 uppercase_exists = True
                 logger.info(f"Collection '{uppercase}' existe")
             except Exception as e:

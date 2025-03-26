@@ -1,0 +1,14 @@
+{
+  "Quels sont les derniers tickets de RONDOT?": {
+    "jira": -1,
+    "zendesk": -1,
+    "confluence": -1
+  },
+  "Comment paramétrer un compte fournisseur dans NetSuite?": {
+    "netsuite": -1,
+    "netsuite_dummies": -1
+  },
+  "Je cherche des informations sur RONDOT dans JIRA": {
+    "jira": -1
+  }
+}

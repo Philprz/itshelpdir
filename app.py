@@ -22,6 +22,7 @@ from openai import OpenAIError
 # Imports internes
 from configuration import logger, global_cache
 from base_de_donnees import init_db
+from adapter_web_chatbot import adapter, initialize_adapter
 
 # Vérification de disponibilité des libs de transport pour Socket.IO
 has_eventlet = find_spec("eventlet") is not None
@@ -442,9 +443,6 @@ async def process_message(user_id, message, mode):
             return
     
     try:
-        # Récupérer le chatbot depuis le contexte d'application
-        chatbot_instance = app_context.chatbot
-        
         # Extraire les options de formatage si disponibles (pour compatibilité avec interface web)
         options = {}
         
@@ -466,12 +464,11 @@ async def process_message(user_id, message, mode):
         # Mesure du temps de traitement
         context_logger.info(f"Appel du chatbot pour analyser: {message_text[:50]}...")
         
-        # Traitement proprement dit avec les options
-        response = await chatbot_instance.process_web_message(
-            message_text, 
-            None,  # conversation 
-            user_id, 
-            mode,
+        # Utilisation de l'adaptateur pour traiter le message
+        response = await adapter.process_message(
+            message=message_text,
+            user_id=user_id,
+            mode=mode,
             debug_zendesk=options['debug_zendesk'],
             progressive=options['progressive'],
             timeout=options['timeout']
@@ -545,8 +542,8 @@ async def initialize():
         await app_context.init_database()
         await app_context.init_cache()
         await app_context.init_search_factory()
-        await app_context.init_chatbot()
-        
+        await initialize_adapter()
+        app_context.chatbot = adapter
         app_context.initialized = True
 
 if __name__ == '__main__':

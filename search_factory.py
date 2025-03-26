@@ -5,6 +5,7 @@ import logging
 import time
 from typing import Optional, Callable
 import asyncio
+from datetime import datetime
 
 from configuration import logger, global_cache
 
@@ -202,117 +203,105 @@ class SearchClientFactory:
         self.initialized = True
         return
 
-    async def get_client(self, source_type: str, collection_name=None):
+    async def get_client(self, client_type: str, collection_name: str = None, fallback_enabled: bool = True):
         """
-        Récupère ou crée un client de recherche pour le type demandé.
-
-        Args:
-            source_type: Type de source de données ('jira', 'zendesk', etc.)
-            collection_name: Nom de la collection (facultatif)
-
-        Returns:
-            Client de recherche correspondant ou None si non pris en charge
-        """
-        # Vérification de l'initialisation
-        if not self.initialized:
-            await self.initialize()
-
-        # Normalisation du type
-        source_type = source_type.lower()
-
-        # Vérification du cache
-        if source_type in self.clients:
-            return self.clients[source_type]
-
-        # Circuit breaker pour la création de client
-        if not self.circuit_breakers["client_creation"].can_execute():
-            self.logger.warning(f"Circuit client_creation ouvert, impossible de créer client {source_type}")
-            return None
-
-        # Obtention dynamique des types de clients
-        async def get_client_types():
-            # Circuit breaker pour l'import de client
-            if not self.circuit_breakers["client_import"].can_execute():
-                return self._get_fallback_client_types()
-                
-            try:
-                from search_clients import (
-                    JiraSearchClient,
-                    ZendeskSearchClient,
-                    ConfluenceSearchClient,
-                    NetsuiteSearchClient,
-                    NetsuiteDummiesSearchClient,
-                    SapSearchClient,
-                    ERPSearchClient
-                )
-
-                # Création des mappings vers les classes
-                client_types = {
-                    'jira': JiraSearchClient,
-                    'zendesk': ZendeskSearchClient,
-                    'confluence': ConfluenceSearchClient,
-                    'netsuite': NetsuiteSearchClient,
-                    'netsuite_dummies': NetsuiteDummiesSearchClient,
-                    'sap': SapSearchClient,
-                    'erp': ERPSearchClient
-                }
-                self.circuit_breakers["client_import"].record_success()
-                return client_types
-            except Exception as e:
-                self.circuit_breakers["client_import"].record_failure()
-                self.logger.error(f"Erreur import classes clients: {str(e)}")
-                return self._get_fallback_client_types()
+        Récupère un client de recherche initialisé.
         
-        client_types = await get_client_types()
-
-        # Vérification du type supporté
-        if source_type not in client_types:
-            self.logger.warning(f"Type de source non pris en charge: {source_type}")
-            return None
-
-        # Récupération de la collection
-        collection_name = self.default_collections.get(source_type) if not collection_name else collection_name
-        if not collection_name:
-            self.logger.warning(f"Pas de collection configurée pour {source_type}")
-            return None
-
-        # Conversion du nom de collection en majuscules pour correspondre aux collections réelles
-        collection_name_upper = collection_name.upper()
-        self.logger.info(f"Conversion du nom de collection '{collection_name}' en '{collection_name_upper}'")
+        Args:
+            client_type: Type de client demandé (jira, zendesk, etc.)
+            collection_name: Nom de collection spécifique (optionnel)
+            fallback_enabled: Si True, retourne un client de fallback en cas d'erreur
             
-        # Création du client avec circuit breaker
-        try:
-            client_class = client_types[source_type]
-            self.logger.info(f"Création d'un client {client_class.__name__} pour la collection {collection_name_upper}")
-            
-            # Vérification de l'état des services requis
-            if not self.qdrant_client:
-                self.logger.error(f"Client Qdrant non initialisé, impossible de créer le client {source_type}")
-                return None
-                
-            if not self.embedding_service:
-                self.logger.error(f"Service d'embeddings non initialisé, impossible de créer le client {source_type}")
-                return None
-            
-            # Création du client avec tous les services requis
-            client = client_class(
-                collection_name=collection_name_upper,
-                qdrant_client=self.qdrant_client,
-                embedding_service=self.embedding_service,
-                translation_service=self.translation_service
-            )
-            
-            # Test minimal du client
-            # Ce serait bien d'avoir une méthode health() sur chaque client
-            
-            # Mise en cache
-            self.clients[source_type] = client
-            self.circuit_breakers["client_creation"].record_success()
+        Returns:
+            Client de recherche ou None
+        """
+        # Standardisation des noms
+        client_type = client_type.lower().strip()
+        
+        # Utilisation du cache
+        cache_key = f"client:{client_type}:{collection_name or 'default'}"
+        
+        # Si présent en cache, retourner directement
+        if cache_key in self.clients:
+            client = self.clients[cache_key]
+            self.logger.debug(f"Client {client_type} récupéré depuis le cache")
             return client
-
+            
+        # Déterminer le nom de collection adapté
+        # Si collection_name n'est pas spécifié, utiliser la valeur par défaut basée sur client_type
+        if not collection_name:
+            # Majuscules pour le nom de collection par convention
+            collection_name = client_type.upper()
+            
+        # Cas spéciaux pour certains types de clients
+        if client_type == 'erp':
+            # Pour ERP, on utilise généralement NETSUITE comme collection
+            collection_name = "NETSUITE"
+        elif client_type == 'netsuite_dummies':
+            # Pour les documents fictifs NetSuite
+            collection_name = "NETSUITE_DUMMIES"
+        
+        self.logger.info(f"Recherche client {client_type} (collection: {collection_name})")
+        
+        try:
+            # 1. Essayer d'obtenir un client déjà initialisé depuis le cache
+            if client_type in self.clients and self.clients[client_type]:
+                client = self.clients[client_type]
+                self.logger.info(f"Client {client_type} trouvé dans le cache")
+                return client
+            
+            # 2. Essayer via les classes standards
+            client_types = await self._get_client_types_safe()
+            client_class = client_types.get(client_type)
+            
+            if client_class:
+                self.logger.info(f"Classe client standard trouvée pour {client_type}")
+                # Initialiser le client
+                client = await self._initialize_client(client_type, collection_name, fallback_enabled)
+                return client
+            
+            # 3. Essayer l'import dynamique depuis les modules qdrant_*
+            client_class = await self._try_dynamic_import_client(client_type)
+            
+            if client_class:
+                self.logger.info(f"Classe client dynamique trouvée pour {client_type}")
+                
+                # Créer et initialiser le client
+                try:
+                    client = client_class(
+                        collection_name=collection_name.upper(),
+                        qdrant_client=self.qdrant_client,
+                        embedding_service=self.embedding_service,
+                        translation_service=self.translation_service
+                    )
+                    
+                    # Mettre en cache
+                    self.clients[cache_key] = client
+                    
+                    return client
+                    
+                except Exception as e:
+                    self.logger.error(f"Erreur lors de l'initialisation du client dynamique {client_type}: {str(e)}")
+                    if fallback_enabled:
+                        return self._create_fallback_client(client_type, collection_name)
+                    return None
+            
+            # 4. Si tout échoue et que le fallback est activé, créer un client de fallback
+            if fallback_enabled:
+                self.logger.warning(f"Aucun client disponible pour {client_type}, création d'un fallback")
+                return self._create_fallback_client(client_type, collection_name)
+            
+            # Sinon, retourner None
+            self.logger.error(f"Aucun client disponible pour {client_type} et fallback désactivé")
+            return None
+            
         except Exception as e:
-            self.circuit_breakers["client_creation"].record_failure()
-            self.logger.error(f"Erreur création client {source_type}: {str(e)}")
+            self.logger.error(f"Erreur lors de la récupération du client {client_type}: {str(e)}")
+            
+            # Si le fallback est activé, retourner un client de fallback
+            if fallback_enabled:
+                return self._create_fallback_client(client_type, collection_name)
+            
             return None
 
     async def _initialize_client(self, client_type: str, collection_name: str, fallback_enabled: bool = True):
@@ -346,6 +335,7 @@ class SearchClientFactory:
             self.logger.info(f"Conversion du nom de collection '{collection_name}' en '{collection_name_upper}'")
                 
             # Créer l'instance avec les paramètres appropriés
+            # NOTE: Nouvelle interface standardisée - aucun besoin d'adaptateur
             client = client_class(
                 collection_name=collection_name_upper,
                 qdrant_client=self.qdrant_client,
@@ -353,9 +343,14 @@ class SearchClientFactory:
                 translation_service=self.translation_service
             )
             
-            self.logger.info(f"Client {client_type} initialisé avec succès (collection: {collection_name_upper})")
-            return client
+            # Vérifier que le client implémente l'interface requise
+            required_methods = ['recherche_intelligente', 'valider_resultat', 'get_source_name', 'format_for_message']
+            for method in required_methods:
+                if not hasattr(client, method):
+                    raise AttributeError(f"Client {client_type} sans méthode requise {method}")
             
+            self.logger.info(f"Client {client_type} initialisé avec succès")
+            return client
         except ImportError as e:
             self.logger.error(f"Erreur d'importation pour le client {client_type}: {str(e)}")
             self.circuit_breakers["client_import"].record_failure()
@@ -372,7 +367,7 @@ class SearchClientFactory:
     
     def _create_fallback_client(self, client_type: str, collection_name: str):
         """
-        Crée un client de fallback en cas d'échec d'initialisation du client principal.
+        Crée un client de fallback en cas d'erreur lors de l'initialisation du vrai client.
         Utilise une implémentation simplifiée qui enregistre les erreurs mais ne bloque pas l'exécution.
         
         Args:
@@ -383,9 +378,9 @@ class SearchClientFactory:
             Un client de fallback minimal
         """
         # Import local pour éviter les cycles d'importation
-        from search_base import AbstractSearchClient
+        from search.core.client_base import GenericSearchClient
         
-        class FallbackSearchClient(AbstractSearchClient):
+        class FallbackSearchClient(GenericSearchClient):
             def __init__(self, client_type, original_error, logger):
                 self.client_type = client_type
                 self.original_error = original_error
@@ -404,8 +399,8 @@ class SearchClientFactory:
             def valider_resultat(self, result):
                 return False
                 
-            async def format_for_slack(self, result):
-                return None
+            async def format_for_message(self, results):
+                return f"Aucun résultat disponible pour {self.client_type.upper()} (client en mode dégradé)."
         
         error_msg = f"Client {client_type} non disponible - utilisation du fallback"
         self.logger.warning(error_msg)
@@ -413,6 +408,221 @@ class SearchClientFactory:
         fallback = FallbackSearchClient(client_type, error_msg, self.logger)
         self.logger.info(f"Client de fallback créé pour {client_type}")
         return fallback
+    
+    def adapt_legacy_client(self, client, client_type=None):
+        """
+        Adapte un client provenant d'un module externe à l'interface standard.
+        Détecte le type de client et applique l'adaptateur approprié si nécessaire.
+        
+        Args:
+            client: Le client à adapter
+            client_type: Type de client (optionnel, pour le logging)
+            
+        Returns:
+            Client adapté ou le client original s'il est déjà compatible
+        """
+        # Si le client est None, retourner None
+        if client is None:
+            return None
+            
+        # Si le client a déjà la méthode recherche_intelligente avec une signature compatible,
+        # vérifier s'il a besoin d'être adapté
+        if hasattr(client, 'recherche_intelligente'):
+            try:
+                # Vérifier la signature de la méthode recherche_intelligente
+                import inspect
+                sig = inspect.signature(client.recherche_intelligente)
+                params = list(sig.parameters.keys())
+                
+                # Si la méthode a les paramètres standards (sans query_vector), on peut l'utiliser directement
+                if len(params) >= 2 and 'question' in sig.parameters and 'query_vector' not in sig.parameters:
+                    self.logger.info(f"Client {client_type or type(client).__name__} déjà compatible, pas besoin d'adaptateur")
+                    return client
+            except (ValueError, TypeError, AttributeError) as e:
+                self.logger.debug(f"Erreur lors de l'inspection de la signature: {str(e)}")
+        
+        # Vérifier si c'est un client Qdrant (a les méthodes recherche_similaire ou recherche_avec_filtres)
+        needs_adapter = (
+            hasattr(client, 'recherche_similaire') or 
+            hasattr(client, 'recherche_avec_filtres') or
+            not hasattr(client, 'recherche_intelligente')
+        )
+        
+        if needs_adapter:
+            self.logger.info(f"Adaptation du client {client_type or type(client).__name__} avec QdrantSearchClientAdapter")
+            return self.QdrantSearchClientAdapter(
+                wrapped_client=client,
+                embedding_service=self.embedding_service,
+                logger=self.logger
+            )
+        
+        # Si le client ne correspond à aucun cas, le retourner tel quel
+        return client
+
+    class QdrantSearchClientAdapter:
+        """
+        Adaptateur pour standardiser l'interface entre les clients Qdrant spécifiques
+        et l'interface AbstractSearchClient.
+        
+        Cette version traite le problème fondamental: l'erreur 'Unknown arguments: ['query_vector']'
+        en redirigeant correctement les appels aux bonnes méthodes.
+        """
+        def __init__(self, wrapped_client, embedding_service, logger):
+            # Le client réel est la classe client (JiraSearchClient, etc.)
+            self.client = wrapped_client
+            # Nous extrayons le client Qdrant et le stockons séparément
+            self.qdrant_client = getattr(wrapped_client, 'client', None)
+            self.embedding_service = embedding_service
+            self.logger = logger
+            
+            # Copier les attributs essentiels du client original
+            self.collection_name = getattr(wrapped_client, 'collection_name', None)
+            self.processor = getattr(wrapped_client, 'processor', None)
+            self.required_fields = getattr(wrapped_client, 'required_fields', [])
+        
+        def get_source_name(self):
+            """Délègue au client encapsulé"""
+            if hasattr(self.client, 'get_source_name'):
+                return self.client.get_source_name()
+            elif hasattr(self.client, 'get_source_prefix'):
+                return self.client.get_source_prefix()
+            return "UNKNOWN"
+            
+        def valider_resultat(self, result):
+            """Délègue la validation au client encapsulé"""
+            if hasattr(self.client, 'valider_resultat'):
+                return self.client.valider_resultat(result)
+            return True
+            
+        async def format_for_slack(self, result):
+            """Délègue le formatage au client encapsulé"""
+            if hasattr(self.client, 'format_for_slack'):
+                return await self.client.format_for_slack(result)
+            return None
+        
+        async def recherche_intelligente(self, 
+                                         question: str, 
+                                         client_name: Optional[str] = None, 
+                                         date_debut: Optional[datetime] = None, 
+                                         date_fin: Optional[datetime] = None,
+                                         limit: int = 10,
+                                         score_threshold: float = 0.0,
+                                         vector_field: str = "vector"):
+            """
+            Méthode standardisée de recherche intelligente qui résout le problème 
+            fondamental des appels 'query_vector' incorrects.
+            
+            1. Nous obtenons l'embedding avec le service approprié
+            2. Nous construisons le filtre si nécessaire
+            3. IMPORTANT: Nous appelons la méthode recherche_similaire ou recherche_avec_filtres
+               du BaseQdrantSearch sous-jacent avec les bons arguments
+            """
+            self.logger.info(f"Recherche intelligente via QdrantSearchClientAdapter pour {self.get_source_name()}")
+            
+            try:
+                # Étape 1: Générer l'embedding pour la question
+                vector = None
+                if self.embedding_service:
+                    try:
+                        vector = await self.embedding_service.get_embedding(question)
+                    except Exception as e:
+                        self.logger.error(f"Erreur génération embedding: {str(e)}")
+                
+                # Vecteur de secours si l'embedding échoue
+                if not vector:
+                    self.logger.warning("Utilisation d'un vecteur factice")
+                    vector = [0.1] * 1536  # Dimension standard OpenAI
+                
+                # Étape 2: Construction des filtres si nécessaire
+                filtres = {}
+                if client_name:
+                    filtres['client'] = client_name
+                if date_debut or date_fin:
+                    filtres['dates'] = {'debut': date_debut, 'fin': date_fin}
+                
+                results = []
+                
+                # Étape 3: Recherche via les méthodes spécifiques du client
+                # Note critique: NE PAS appeler directement les méthodes du client Qdrant!
+                
+                # Stratégie 1: Essayer la méthode recherche_intelligente native
+                if hasattr(self.client, 'recherche_intelligente'):
+                    try:
+                        self.logger.info(f"Utilisation de la recherche_intelligente native pour {self.get_source_name()}")
+                        return await self.client.recherche_intelligente(
+                            question=question,
+                            client_name=client_name,
+                            date_debut=date_debut,
+                            date_fin=date_fin,
+                            limit=limit,
+                            score_threshold=score_threshold,
+                            vector_field=vector_field
+                        )
+                    except Exception as e:
+                        self.logger.warning(f"Échec recherche_intelligente native: {str(e)}")
+                
+                # Stratégie 2: Vérifier si nous avons besoin d'utiliser un filtre
+                if filtres and hasattr(self.client, 'recherche_avec_filtres'):
+                    try:
+                        self.logger.info(f"Utilisation de recherche_avec_filtres pour {self.get_source_name()}")
+                        # MODIFICATION CRITIQUE: Remplacer les appels directs au client Qdrant
+                        # par des appels à la méthode du client emballé
+                        results = self.client.recherche_avec_filtres(
+                            query_vector=vector,
+                            filtres=filtres,
+                            limit=limit
+                        )
+                        if results:
+                            return results
+                    except Exception as e:
+                        self.logger.error(f"Erreur recherche avec filtres: {str(e)}")
+                
+                # Stratégie 3: Recherche similaire simple en dernier recours
+                if hasattr(self.client, 'recherche_similaire'):
+                    try:
+                        self.logger.info(f"Utilisation de recherche_similaire pour {self.get_source_name()}")
+                        # MODIFICATION CRITIQUE: Remplacer les appels directs au client Qdrant
+                        # par des appels à la méthode du client emballé
+                        results = self.client.recherche_similaire(
+                            query_vector=vector,
+                            limit=limit
+                        )
+                    except Exception as e:
+                        self.logger.error(f"Erreur recherche similaire: {str(e)}")
+                
+                # Filtrage par score si nécessaire
+                if score_threshold > 0 and results:
+                    results = [r for r in results if getattr(r, 'score', 0) >= score_threshold]
+                
+                return results
+                
+            except Exception as e:
+                self.logger.error(f"Erreur globale dans recherche_intelligente pour {self.get_source_name()}: {str(e)}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+                return []
+
+        # Méthodes utilitaires supplémentaires pour compatibilité
+
+        def __getattr__(self, name):
+            """
+            Méthode de fallback pour déléguer les appels inconnus au client encapsulé
+            
+            Args:
+                name: Nom de l'attribut ou de la méthode recherchée
+                
+            Returns:
+                L'attribut ou la méthode du client encapsulé
+                
+            Raises:
+                AttributeError: Si l'attribut n'existe pas
+            """
+            # Déléguer aux attributs du client
+            if hasattr(self.client, name):
+                return getattr(self.client, name)
+            
+            # Lever une exception pour les attributs inconnus
+            raise AttributeError(f"L'attribut '{name}' n'existe ni dans l'adaptateur ni dans le client")
     
     def _get_client_types(self):
         """Import dynamique des types de clients pour éviter les imports circulaires"""
@@ -438,11 +648,63 @@ class SearchClientFactory:
         }
     
     async def _get_client_types_safe(self):
+        """Méthode sûre pour obtenir les types de clients avec gestion des erreurs."""
         try:
             return self._get_client_types()
         except Exception as e:
-            self.logger.error(f"Erreur import classes clients: {str(e)}")
-            return self._get_fallback_client_types()
+            self.logger.error(f"Erreur lors de l'obtention des types de clients: {str(e)}")
+            return {
+                'jira': None,
+                'zendesk': None,
+                'confluence': None,
+                'netsuite': None,
+                'netsuite_dummies': None,
+                'sap': None,
+                'erp': None
+            }
+            
+    async def _try_dynamic_import_client(self, client_type):
+        """
+        Tente d'importer un client dynamiquement à partir de fichiers qdrant_*.py.
+        Utilisé comme fallback si les clients standards ne sont pas disponibles.
+        
+        Args:
+            client_type: Type de client à importer (e.g. 'jira', 'zendesk')
+            
+        Returns:
+            Classe du client ou None si non trouvée
+        """
+        try:
+            # Tenter d'importer depuis un module qdrant_*
+            module_name = f"qdrant_{client_type}"
+            self.logger.info(f"Tentative d'import dynamique depuis {module_name}")
+            
+            # Import dynamique du module
+            import importlib
+            module = importlib.import_module(module_name)
+            
+            # Chercher la classe QdrantClient dans le module
+            class_name = f"Qdrant{client_type.capitalize()}Client"
+            if hasattr(module, class_name):
+                client_class = getattr(module, class_name)
+                self.logger.info(f"Client {class_name} trouvé dans {module_name}")
+                return client_class
+                
+            # Si on ne trouve pas la classe spécifique, chercher QdrantClient
+            if hasattr(module, "QdrantClient"):
+                client_class = getattr(module, "QdrantClient")
+                self.logger.info(f"Client générique QdrantClient trouvé dans {module_name}")
+                return client_class
+                
+            self.logger.warning(f"Aucune classe client trouvée dans {module_name}")
+            return None
+            
+        except ImportError as e:
+            self.logger.debug(f"Module {module_name} non trouvé: {str(e)}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Erreur lors de l'import dynamique de {client_type}: {str(e)}")
+            return None
     
     def _get_fallback_client_types(self):
         """Crée des types de clients de repli en cas d'erreur d'import"""

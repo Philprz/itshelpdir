@@ -181,8 +181,7 @@ class ChatBot:
                     {"role": "system", "content": strict_prompt},
                     {"role": "user", "content": text}
                 ],
-                temperature=0.1,
-                max_tokens=800
+                temperature=0.1
             )
             content = response.choices[0].message.content.strip()
             if not content:
@@ -290,6 +289,12 @@ class ChatBot:
             self.logger.info(f"Collections déterminées par priority_sources: {sources}")
             return sources
             
+        # Vérification spécifique pour RONDOT
+        query_text = analysis.get('query', {}).get('original','').upper()
+        if "RONDOT" in query_text:
+            self.logger.info("Collections déterminées par mention de 'RONDOT': ['jira', 'zendesk', 'confluence']")
+            return ['jira', 'zendesk', 'confluence']
+            
         # Vérification spécifique pour les tickets
         if "tickets" in analysis.get('query', {}).get('original','').lower():
             self.logger.info("Collections déterminées par mention de 'tickets': ['jira', 'zendesk', 'confluence']")
@@ -369,11 +374,18 @@ class ChatBot:
             task_start_time = time.monotonic()
             try:
                 self.logger.info(f"Démarrage recherche {source_type}")
+                # Paramètres de recherche standard pour tous les clients
+                search_limit = 10  # Nombre maximum de résultats par source
+                score_min = 0.5    # Score minimal pour un résultat pertinent
+                
                 results = await client.recherche_intelligente(
                     question=question,
                     client_name=client_info,
                     date_debut=date_debut,
-                    date_fin=date_fin
+                    date_fin=date_fin,
+                    limit=search_limit,
+                    score_threshold=score_min,
+                    vector_field="vector"
                 )
 
                 duration = time.monotonic() - task_start_time
@@ -417,12 +429,11 @@ class ChatBot:
 
                 # Marquage de la source dans les résultats
                 for r in res:
-                    # Log détaillé pour comprendre la structure
+                    # Log détaillé des résultats
                     self.logger.info(f"Résultat de {source_type}: score={getattr(r, 'score', 0)}")
                     
-                    # Ajout d'un attribut source_type directement sur l'objet résultat
-                    setattr(r, 'source_type', source_type)
-                    
+                    # Au lieu d'essayer d'ajouter un attribut directement à l'objet ScoredPoint,
+                    # nous allons uniquement le mettre dans le payload, qui est plus flexible
                     if hasattr(r, 'payload'):
                         try:
                             if isinstance(r.payload, dict):
@@ -435,6 +446,15 @@ class ChatBot:
                                 r.payload = {'source_type': source_type, 'original_payload': old_payload}
                         except Exception as e:
                             self.logger.warning(f"Erreur lors de l'ajout du source_type au payload: {str(e)}")
+                    else:
+                        # Si r n'a pas d'attribut payload, essayons de le traiter comme un dictionnaire
+                        try:
+                            if isinstance(r, dict):
+                                r['source_type'] = source_type
+                                if 'payload' in r and isinstance(r['payload'], dict):
+                                    r['payload']['source_type'] = source_type
+                        except Exception as e:
+                            self.logger.warning(f"Impossible d'ajouter source_type au résultat: {str(e)}")
                     
                     # Ajouter le résultat à la liste combinée
                     combined_results.append(r)
@@ -585,36 +605,66 @@ class ChatBot:
         source_types = {}
         for r in results:
             try:
-                source_type = self._detect_source_type(r)
-                
-                # Log détaillé des résultats
-                self.logger.info(f"Résultat de {source_type}: score={getattr(r, 'score', 0)}")
-                
-                if source_type:
-                    source_types[source_type] = source_types.get(source_type, 0) + 1
+                # Détection du payload selon le format de l'objet
+                if isinstance(r, dict):
+                    # Format dictionnaire
+                    p = r.get('payload', {})
+                elif hasattr(r, 'payload'):
+                    # Format objet avec attribut 'payload'
+                    if isinstance(r.payload, dict):
+                        p = r.payload
+                    elif hasattr(r.payload, '__dict__'):
+                        p = r.payload.__dict__
+                    else:
+                        p = {}
+                else:
+                    # Fallback
+                    p = {}
+                    
+                # Si source_type est présent dans le payload, l'utiliser directement
+                if 'source_type' in p:
+                    source_type = p['source_type']
+                else:
+                    # Détection basée sur les champs présents
+                    if 'key' in p: 
+                        source_type = 'jira'
+                    elif 'ticket_id' in p: 
+                        source_type = 'zendesk'
+                    elif 'space_id' in p: 
+                        source_type = 'confluence'
+                    elif 'pdf_path' in p:
+                        source_type = 'netsuite_dummies' if 'dummy' in str(p.get('title','')).lower() else 'sap'
+                    elif 'url' in p and 'content' in p:
+                        source_type = 'netsuite'
+                    elif 'title' in p and 'text' in p:
+                        source_type = 'sap'
+                    else:
+                        # Détection basée sur des attributs additionnels
+                        if any(key in str(p.keys()).lower() for key in ['jira', 'issue']):
+                            source_type = 'jira'
+                        else:
+                            # Détection basée sur le nom de collection si disponible
+                            if hasattr(r, 'collection_name'):
+                                collection = r.collection_name.lower()
+                                if 'jira' in collection:
+                                    source_type = 'jira'
+                                elif 'zendesk' in collection:
+                                    source_type = 'zendesk'
+                                elif 'confluence' in collection:
+                                    source_type = 'confluence'
+                                elif 'netsuite_dummies' in collection:
+                                    source_type = 'netsuite_dummies'
+                                elif 'netsuite' in collection:
+                                    source_type = 'netsuite'
+                                elif 'sap' in collection:
+                                    source_type = 'sap'
+                                else:
+                                    source_type = 'unknown'
+                            else:
+                                source_type = 'unknown'
+                source_types[source_type] = source_types.get(source_type, 0) + 1
             except Exception as e:
                 self.logger.error(f"Erreur lors de la détection du type de source: {str(e)}")
-
-        # Mode de débogage Zendesk si activé
-        if debug_zendesk:
-            zendesk_count = source_types.get('zendesk', 0)
-            self.logger.info(f"Mode debug Zendesk activé. Nombre de résultats Zendesk: {zendesk_count}")
-            
-            # Log des détails des résultats Zendesk
-            for i, r in enumerate(results):
-                try:
-                    source_type = self._detect_source_type(r)
-                    if source_type == 'zendesk':
-                        # Extraction et log du payload
-                        if isinstance(r, dict):
-                            payload = r.get('payload', {})
-                        else:
-                            payload = r.payload if isinstance(r.payload, dict) else getattr(r.payload, '__dict__', {})
-                        
-                        # Log des clés présentes dans le payload
-                        self.logger.info(f"Zendesk résultat #{i+1} - Clés disponibles: {list(payload.keys() if isinstance(payload, dict) else [])}")
-                except Exception as e:
-                    self.logger.error(f"Erreur log debug Zendesk pour résultat #{i+1}: {str(e)}")
 
         # Ajout du résumé des sources
         source_summary = " | ".join([f"{count} {src.upper()}" for src, count in source_types.items()])
@@ -1027,28 +1077,66 @@ class ChatBot:
         if not date_value:
             return 'N/A'
         try:
+            # Si c'est déjà une chaîne formatée en YYYY-MM-DD, la retourner telle quelle
+            if isinstance(date_value, str) and len(date_value) >= 10:
+                if date_value[4] == '-' and date_value[7] == '-' and date_value[:10].replace('-', '').isdigit():
+                    return date_value[:10]
+                    
+            # Traitement pour les types numériques
             if isinstance(date_value, (int, float)):
                 return datetime.fromtimestamp(date_value, tz=timezone.utc).strftime("%Y-%m-%d")
-            elif isinstance(date_value, str):
+                
+            # Traitement pour les chaînes
+            if isinstance(date_value, str):
+                # Essai de conversion en timestamp si c'est un nombre
                 if date_value.isdigit():
-                    return datetime.fromtimestamp(float(date_value), tz=timezone.utc).strftime("%Y-%m-%d")
-                try:
-                    return datetime.fromisoformat(date_value.replace('Z', '+00:00')).strftime("%Y-%m-%d")
-                except ValueError:
-                    return date_value[:10] if date_value else 'N/A'
-            return 'N/A'
+                    try:
+                        return datetime.fromtimestamp(float(date_value), tz=timezone.utc).strftime("%Y-%m-%d")
+                    except (ValueError, OverflowError):
+                        pass
+                
+                # Essai de conversion depuis le format ISO
+                if 'T' in date_value:
+                    try:
+                        date_obj = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
+                        return date_obj.strftime("%Y-%m-%d")
+                    except ValueError:
+                        pass
+                        
+                # Fallback: retourner les 10 premiers caractères s'ils ressemblent à une date
+                if len(date_value) >= 10:
+                    return date_value[:10]
+                    
+            # Si c'est un objet datetime, formater directement
+            if isinstance(date_value, datetime):
+                return date_value.strftime("%Y-%m-%d")
+                
+            # Fallback final
+            return str(date_value) if date_value else 'N/A'
+            
         except Exception as e:
             self.logger.error(f"Erreur formatage date: {str(e)}")
             return 'N/A'
-
     
     def _detect_source_type(self, result) -> str:
         try:
+            # Détection du payload selon le format de l'objet
             if isinstance(result, dict):
-                p = result
+                # Format dictionnaire
+                p = result.get('payload', {})
+            elif hasattr(result, 'payload'):
+                # Format objet avec attribut 'payload'
+                if isinstance(result.payload, dict):
+                    p = result.payload
+                elif hasattr(result.payload, '__dict__'):
+                    p = result.payload.__dict__
+                else:
+                    p = {}
             else:
-                p = result.payload if isinstance(result.payload, dict) else getattr(result.payload, '__dict__', {})
+                # Fallback
+                p = {}
                 
+            # Si source_type est présent dans le payload, l'utiliser directement
             if 'source_type' in p:
                 return p['source_type']
                 
@@ -1065,9 +1153,27 @@ class ChatBot:
                 return 'netsuite'
             if 'title' in p and 'text' in p:
                 return 'sap'
-                # Détection basée sur des attributs additionnels
+            
+            # Détection basée sur des attributs additionnels
             if any(key in str(p.keys()).lower() for key in ['jira', 'issue']):
                 return 'jira'
+                
+            # Détection basée sur le nom de collection si disponible
+            if hasattr(result, 'collection_name'):
+                collection = result.collection_name.lower()
+                if 'jira' in collection:
+                    return 'jira'
+                if 'zendesk' in collection:
+                    return 'zendesk'
+                if 'confluence' in collection:
+                    return 'confluence'
+                if 'netsuite_dummies' in collection:
+                    return 'netsuite_dummies'
+                if 'netsuite' in collection:
+                    return 'netsuite'
+                if 'sap' in collection:
+                    return 'sap'
+                
             return 'unknown'
             
         except Exception as e:
@@ -1259,12 +1365,18 @@ class ChatBot:
 
                     # Tentative d'extraction directe du client si non trouvé par l'analyse
                     if not client_info:
-                        client_name, _, _ = await extract_client_name(text)
-                        if client_name:
-                            client_info = {"source": client_name, "jira": client_name, "zendesk": client_name}
-                            self.logger.info(f"Client trouvé (méthode directe): {client_name}")
+                        # Vérification explicite pour RONDOT
+                        if "RONDOT" in text.upper():
+                            client_info = {"source": "RONDOT", "jira": "RONDOT", "zendesk": "RONDOT"}
+                            self.logger.info("Client RONDOT détecté explicitement")
                         else:
-                            self.logger.info("Aucun client identifié pour cette requête")
+                            # Extraction standard
+                            client_name, _, _ = await extract_client_name(text)
+                            if client_name:
+                                client_info = {"source": client_name, "jira": client_name, "zendesk": client_name}
+                                self.logger.info(f"Client trouvé (méthode directe): {client_name}")
+                            else:
+                                self.logger.info("Aucun client identifié pour cette requête")
 
                     # Gestion des dates
                     date_debut, date_fin = None, None

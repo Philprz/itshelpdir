@@ -10,14 +10,15 @@ import json
 import argparse
 import asyncio
 import logging
+from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional
-from datetime import datetime
-
-# Import des modules du projet
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+from qdrant_client.http import models
 from configuration import setup_logging
 from embedding_service import EmbeddingService
+
+# Charger les variables d'environnement
+load_dotenv(verbose=True)
 
 # Configuration du logging
 setup_logging()
@@ -86,7 +87,7 @@ class QdrantDirectTester:
         # Dimension standard pour les embeddings OpenAI
         return [0.1] * 1536
     
-    def construire_filtre(self, client_name: Optional[str] = None) -> Optional[Filter]:
+    def construire_filtre(self, client_name: Optional[str] = None) -> Optional[models.Filter]:
         """
         Construit un filtre Qdrant en fonction des critères.
         
@@ -99,11 +100,11 @@ class QdrantDirectTester:
         if not client_name:
             return None
             
-        return Filter(
+        return models.Filter(
             must=[
-                FieldCondition(
+                models.FieldCondition(
                     key="client",
-                    match=MatchValue(value=client_name)
+                    match=models.MatchValue(value=client_name)
                 )
             ]
         )
@@ -140,6 +141,7 @@ class QdrantDirectTester:
             
             # Utiliser query_points au lieu de search (qui est déprécié)
             try:
+                logger.info("Tentative avec la méthode query_points (recommandée)")
                 search_results = self.qdrant_client.query_points(
                     collection_name=self.collection_name,
                     query_vector=vector,
@@ -149,20 +151,27 @@ class QdrantDirectTester:
                     with_payload=True,
                     with_vectors=False
                 )
-                logger.info(f"Recherche effectuée avec query_points")
+                logger.info("Recherche réussie avec query_points")
             except (AttributeError, Exception) as e:
                 # Fallback à search en cas d'erreur (versions antérieures du client)
-                logger.warning(f"Erreur avec query_points: {str(e)}. Utilisation de search en fallback.")
-                search_results = self.qdrant_client.search(
-                    collection_name=self.collection_name,
-                    query_vector=vector,
-                    limit=limit,
-                    query_filter=query_filter,
-                    score_threshold=score_threshold,
-                    with_payload=True,
-                    with_vectors=False
-                )
-                logger.info(f"Recherche effectuée avec search")
+                logger.warning(f"Erreur avec query_points: {str(e)}")
+                
+                # Tenter d'utiliser search (méthode dépréciée)
+                try:
+                    logger.info("Tentative avec la méthode search (dépréciée)")
+                    search_results = self.qdrant_client.search(
+                        collection_name=self.collection_name,
+                        query_vector=vector,
+                        limit=limit,
+                        query_filter=query_filter,
+                        score_threshold=score_threshold,
+                        with_payload=True,
+                        with_vectors=False
+                    )
+                    logger.info("Recherche réussie avec search")
+                except Exception as s_error:
+                    logger.error(f"Erreur avec search: {str(s_error)}")
+                    return []
             
             # Transformation des résultats
             results = []

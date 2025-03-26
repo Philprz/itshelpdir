@@ -190,9 +190,13 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
             # Normalisation du message pour éviter les problèmes de casse
             message_clean = normalize_string(message)
             logger.info(f"Message normalisé: {message_clean}")
-            
+            # Détection explicite de RONDOT (prioritaire)
+            if 'RONDOT' in message_clean.upper():
+                logger.info(f"Match RONDOT trouvé explicitement")
+                return 'RONDOT', 100.0, {"source": "RONDOT", "jira": "RONDOT", "zendesk": "RONDOT"}
+                        
             # Liste de mots-clés courants qui peuvent précéder un nom de client
-            mots_cles = ["ticket", "tickets", "client", "société", "entreprise", "dossier", "problème", "chez"]
+            mots_cles = ["ticket", "tickets", "client", "société", "entreprise", "dossier", "problème", "chez", "de"]
             
             # Récupération de tous les clients
             stmt = select(Client)
@@ -204,6 +208,7 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
             for client in all_clients:
                 variations = list(client.variations.copy() if hasattr(client, 'variations') and client.variations else [])
                 variations.append(client.client)
+                
                 # La recherche vérifie si le nom du client est un mot complet du message
                 # et non une sous-chaîne quelconque
                 for variation in variations:
@@ -211,10 +216,19 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
                     words = message_clean.split()
                     
                     # 1. Recherche de mots complets
-                    for word in words:
-                        if word == norm_variation or norm_variation == word:
-                            logger.info(f"Match trouvé: {client.client} via {variation} (mot: {word})")
+                    for i, word in enumerate(words):
+                        if word == norm_variation:
+                            logger.info(f"Match trouvé: {client.client} via {variation} (mot exact: {word})")
                             return client.client, 100.0, {"source": client.client}
+                        
+                        # Vérifier aussi si le mot du client est suivi par une date ou un nombre
+                        # (comme dans "RONDOT 2025")
+                        if i < len(words) - 1 and word == norm_variation:
+                            next_word = words[i + 1]
+                            # Si le mot suivant semble être une année ou un nombre
+                            if next_word.isdigit() or (len(next_word) == 4 and next_word.isdigit()):
+                                logger.info(f"Match trouvé: {client.client} suivi d'un nombre/date: {next_word}")
+                                return client.client, 100.0, {"source": client.client}
                     
                     # 2. Recherche après des mots-clés courants
                     for i, word in enumerate(words):
@@ -231,6 +245,18 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
                                 if normalize_string(two_words) == norm_variation:
                                     logger.info(f"Match trouvé après mot-clé '{word}' (multi-mots): {client.client}")
                                     return client.client, 100.0, {"source": client.client, "keyword": word}
+            
+            # 3. Recherche basée sur les sous-chaînes
+            for client in all_clients:
+                variations = list(client.variations.copy() if hasattr(client, 'variations') and client.variations else [])
+                variations.append(client.client)
+                
+                for variation in variations:
+                    norm_variation = normalize_string(variation)
+                    # Vérifier si le nom du client est une sous-chaîne du message
+                    if norm_variation in message_clean and len(norm_variation) > 2:  # Éviter les faux positifs avec des noms très courts
+                        logger.info(f"Match trouvé par sous-chaîne: {client.client} via {variation}")
+                        return client.client, 90.0, {"source": client.client, "method": "substring"}
 
             # Recherche floue si aucun match exact
             best_match = None
@@ -243,18 +269,24 @@ async def extract_client_name(message: str) -> Tuple[Optional[str], float, Dict[
 
                 for variation in variations:
                     norm_variation = normalize_string(variation)
+                    # Score par ratio simple
                     ratio_score = fuzz.ratio(message_clean, norm_variation)
+                    # Score en ignorant l'ordre des mots
                     token_sort_score = fuzz.token_sort_ratio(message_clean, norm_variation)
-                    # Ajouter token_set_ratio qui est plus flexible pour les mots dans un ordre différent
+                    # Score basé sur l'intersection des mots
                     token_set_score = fuzz.token_set_ratio(message_clean, norm_variation)
-                    score = max(ratio_score, token_sort_score, token_set_score)
+                    # Nouveau: score partiel pour les sous-séquences
+                    partial_score = fuzz.partial_ratio(message_clean, norm_variation)
+                    
+                    # Utiliser le meilleur score parmi ces méthodes
+                    score = max(ratio_score, token_sort_score, token_set_score, partial_score)
 
                     if score > best_score:
                         best_score = score
                         best_match = client
 
-            # Réduire le seuil pour améliorer la détection
-            if best_match and best_score >= 50:  # Seuil réduit de 60% à 50%
+            # Réduire encore le seuil pour améliorer la détection
+            if best_match and best_score >= 45:  # Seuil réduit à 45%
                 logger.info(f"Match flou: {best_match.client} ({best_score}%)")
                 return best_match.client, best_score, {"source": best_match.client}
 

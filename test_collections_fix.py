@@ -7,10 +7,8 @@ Script pour tester les corrections apportées aux recherches dans les collection
 """
 
 import os
-import sys
 import asyncio
 import logging
-from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 

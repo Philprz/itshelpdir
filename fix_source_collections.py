@@ -9,7 +9,6 @@ l'utilisation des collections dans le code, notamment NETSUITE, NETSUITE_DUMMIES
 
 import os
 import logging
-import json
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 
@@ -189,7 +188,7 @@ def write_recommendations(results):
         for i, rec in enumerate(recommendations, 1):
             f.write(f"{i}. {rec}\n\n")
     
-    logger.info(f"Recommandations écrites dans erp_collections_recommendations.txt")
+    logger.info("Recommandations écrites dans erp_collections_recommendations.txt")
 
 def main():
     """Fonction principale."""
