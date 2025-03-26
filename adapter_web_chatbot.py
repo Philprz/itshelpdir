@@ -96,12 +96,60 @@ class WebChatbotAdapter:
                 timeout=timeout
             )
             
+            # Vérification et adaptation du format de la réponse
+            if response and isinstance(response, dict):
+                # Vérifie si la réponse contient des blocs
+                if "blocks" in response and isinstance(response["blocks"], list):
+                    # Log de la structure de la réponse pour le débogage
+                    self.logger.info(f"Réponse avec {len(response['blocks'])} blocs générée")
+                    
+                    # S'assurer que le type de message est défini
+                    if "type" not in response:
+                        response["type"] = "result"
+                        
+                    # Ajouter un champ message si absent mais avec des blocs
+                    if "message" not in response and "text" in response:
+                        response["message"] = response["text"]
+                    
+                    # Ajouter un identifiant unique pour le suivi
+                    if "id" not in response:
+                        import uuid
+                        response["id"] = str(uuid.uuid4())
+                else:
+                    # Cas où la réponse ne contient pas de blocs mais a du texte
+                    if "text" in response and "blocks" not in response:
+                        self.logger.warning("Réponse sans blocs détectée, création d'un bloc par défaut")
+                        response["message"] = response["text"]
+                        response["blocks"] = [{
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": response["text"]}
+                        }]
+                        response["type"] = "result"
+            
+            # Si la réponse est None ou vide, créer une réponse d'erreur
+            if not response:
+                self.logger.error("La réponse est vide ou None")
+                response = {
+                    "message": "Aucune réponse générée. Veuillez réessayer.",
+                    "type": "error",
+                    "blocks": [{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": "Aucune réponse générée. Veuillez réessayer."}
+                    }]
+                }
+            
             return response
         except Exception as e:
             self.logger.error(f"❌ Erreur lors du traitement du message: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
-            return {"error": f"Erreur lors du traitement du message: {str(e)}"}
+            return {"message": f"Erreur lors du traitement du message: {str(e)}", 
+                    "error": str(e), 
+                    "type": "error",
+                    "blocks": [{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"Erreur lors du traitement du message: {str(e)}"}
+                    }]}
     
     async def test_connection(self):
         """Teste la connexion au chatbot avec une question simple"""

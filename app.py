@@ -477,6 +477,43 @@ async def process_message(user_id, message, mode):
         processing_time = time.time() - start_time
         context_logger.info(f"Traitement terminé en {processing_time:.2f}s")
         
+        # Vérification et normalisation de la réponse avant émission
+        if not response:
+            context_logger.error("Réponse vide reçue de l'adaptateur")
+            socketio.emit('response', {
+                'message': "Une erreur est survenue lors du traitement de votre demande.",
+                'type': 'error'
+            }, room=user_id)
+            return
+            
+        # S'assurer que la réponse a le bon format pour l'UI
+        if isinstance(response, dict):
+            # S'assurer que les champs essentiels sont présents
+            if 'type' not in response:
+                response['type'] = 'result'
+                
+            # Transformer 'text' en 'message' si nécessaire (convention UI)
+            if 'message' not in response and 'text' in response:
+                response['message'] = response['text']
+                
+            # Vérifier la présence de blocs pour l'affichage
+            if 'blocks' not in response or not response['blocks']:
+                context_logger.warning("Réponse sans blocs, application d'un format par défaut")
+                if 'message' in response:
+                    response['blocks'] = [{
+                        'type': 'section',
+                        'text': {'type': 'mrkdwn', 'text': response['message']}
+                    }]
+                elif 'text' in response:
+                    response['blocks'] = [{
+                        'type': 'section',
+                        'text': {'type': 'mrkdwn', 'text': response['text']}
+                    }]
+                    
+            # Log des informations de blocs
+            if 'blocks' in response:
+                context_logger.info(f"Émission d'une réponse avec {len(response['blocks'])} blocs")
+                
         # Format de réponse attendu pour la compatibilité
         socketio.emit('response', response, room=user_id)
 

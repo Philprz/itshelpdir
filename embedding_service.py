@@ -1,12 +1,12 @@
 # À ajouter dans un fichier embedding_service.py
 
 import asyncio
-import hashlib
 import logging
 import time
-from collections import OrderedDict
-from typing import Dict, List, Optional, Tuple
-import numpy as np
+from collections import OrderedDict, Counter
+import os
+import pickle
+from typing import List, Optional
 
 class EmbeddingService:
     """Service centralisé de génération d'embeddings avec cache optimisé et gestion des erreurs."""
@@ -64,113 +64,316 @@ class EmbeddingService:
         self.l1_cache_ttl = 300  # 5 minutes en secondes
         self.l1_cache_timestamps = {}  # Timestamps pour le TTL
         
-    def _get_cache_key(self, text: str) -> str:
-        """Génère une clé de cache unique pour le texte."""
-        text = self._normalize_text(text)
-        return hashlib.md5(text.encode('utf-8')).hexdigest()
-    
-    def _normalize_text(self, text: str) -> str:
-        """Normalise le texte pour uniformiser les requêtes."""
-        if not text:
-            return ""
-        # Suppression des espaces superflus et mise en minuscule
-        normalized = " ".join(text.lower().split())
-        # Suppression des caractères spéciaux si trop nombreux
-        if sum(1 for c in normalized if not c.isalnum() and not c.isspace()) / len(normalized) > 0.3:
-            normalized = "".join(c for c in normalized if c.isalnum() or c.isspace())
-        return normalized.strip()
-    
-    def _validate_vector(self, vector: List[float]) -> bool:
-        """Valide le vecteur d'embedding."""
-        if not isinstance(vector, list):
-            return False
-        if not vector or len(vector) != self.dimension:
-            return False
-        if not all(isinstance(x, float) for x in vector):
-            return False
-        return True
-    
-    async def _check_circuit_breaker(self):
-        """
-        Vérifie si le circuit breaker est ouvert et tente de le réinitialiser si le délai est écoulé.
+        # Nouvelles variables pour l'amélioration du cache
+        self.access_frequency = Counter()  # Compteur de fréquence d'utilisation
+        self.last_cache_evaluation = time.monotonic()  # Dernière évaluation du cache
+        self.cache_evaluation_interval = 3600  # Évaluer l'efficacité du cache chaque heure
+        self.frequent_queries_threshold = 5  # Nombre minimal d'accès pour considérer une entrée fréquente
+        self.last_cache_cleanup = time.monotonic()  # Dernier nettoyage du cache
+        self.cache_cleanup_interval = 600  # Nettoyer le cache toutes les 10 minutes
+        self.cache_file_path = os.getenv('EMBEDDING_CACHE_FILE', 'embedding_cache.pkl')  # Fichier de cache persistant
         
-        Returns:
-            bool: True si le circuit est fermé (opérationnel), False si ouvert (en erreur)
-        """
-        if not self.circuit_open:
-            return True
-            
-        # Vérifier si le délai de réinitialisation est écoulé
-        if self.circuit_reset_time and time.monotonic() >= self.circuit_reset_time:
-            self.logger.info("Tentative de réinitialisation du circuit breaker")
-            self.circuit_open = False
-            self.consecutive_failures = 0
-            self.circuit_reset_time = None
-            return True
-            
-        return False
+        # Charger le cache persistant au démarrage
+        self._load_cache_from_disk()
         
-    async def reset_circuit_breaker(self, force=False):
-        """
-        Réinitialise manuellement le circuit breaker.
+        # Planifier l'évaluation périodique du cache
+        asyncio.create_task(self._schedule_cache_maintenance())
         
-        Args:
-            force: Si True, réinitialise même si le délai n'est pas écoulé
+    async def _schedule_cache_maintenance(self):
+        """Planifie les tâches de maintenance périodiques du cache."""
+        while True:
+            # Attendre un intervalle avant la prochaine évaluation
+            await asyncio.sleep(min(self.cache_evaluation_interval, self.cache_cleanup_interval))
             
-        Returns:
-            bool: True si réinitialisé avec succès
-        """
-        if not self.circuit_open:
-            return True
+            current_time = time.monotonic()
             
-        if force or (self.circuit_reset_time and time.monotonic() >= self.circuit_reset_time):
-            self.logger.info("Réinitialisation manuelle du circuit breaker")
-            self.circuit_open = False
-            self.consecutive_failures = 0
-            self.circuit_reset_time = None
-            return True
-            
-        return False
-        
-    async def clear_cache(self, level="all"):
-        """
-        Vide le cache d'embeddings.
-        
-        Args:
-            level: Niveau de cache à vider ("l1", "l2" ou "all")
-            
-        Returns:
-            Dict: Statistiques sur l'opération
-        """
-        cleared = {
-            "l1": 0,
-            "l2": 0
-        }
-        
-        if level in ["l1", "all"]:
-            cleared["l1"] = len(self.l1_cache)
-            self.l1_cache.clear()
-            self.l1_cache_timestamps.clear()
-            self.logger.info(f"Cache L1 vidé: {cleared['l1']} entrées supprimées")
-            
-        if level in ["l2", "all"] and self.l2_cache:
-            try:
-                # Supprimer uniquement les clés dans le namespace embeddings
-                count = await self.l2_cache.clear(namespace=self.namespace)
-                cleared["l2"] = count
-                self.logger.info(f"Cache L2 vidé: {count} entrées supprimées")
-            except Exception as e:
-                self.logger.error(f"Erreur lors du vidage du cache L2: {str(e)}")
+            # Évaluation périodique du cache
+            if current_time - self.last_cache_evaluation >= self.cache_evaluation_interval:
+                await self._evaluate_cache_efficiency()
+                self.last_cache_evaluation = current_time
                 
-        # Réinitialisation des statistiques
-        if level == "all":
-            self.hit_count = 0
-            self.miss_count = 0
-            self.l1_hit_count = 0
-            self.l2_hit_count = 0
+            # Nettoyage périodique du cache
+            if current_time - self.last_cache_cleanup >= self.cache_cleanup_interval:
+                await self._cleanup_cache()
+                self.last_cache_cleanup = current_time
+                
+            # Sauvegarde périodique du cache
+            await self._save_cache_to_disk()
+
+    async def _evaluate_cache_efficiency(self):
+        """Évalue l'efficacité du cache et ajuste les paramètres si nécessaire."""
+        total_requests = self.hit_count + self.miss_count
+        if total_requests == 0:
+            return
             
-        return cleared
+        hit_rate = (self.hit_count / total_requests) * 100
+        self.logger.info(f"Évaluation du cache: taux de succès {hit_rate:.1f}% ({self.hit_count}/{total_requests})")
         
+        # Identifier les entrées fréquemment utilisées
+        frequent_entries = {k: v for k, v in self.access_frequency.items() if v >= self.frequent_queries_threshold}
+        self.logger.info(f"Entrées fréquentes identifiées: {len(frequent_entries)}")
+        
+        # Ajuster la taille du cache si nécessaire
+        if hit_rate < 50 and len(self.l1_cache) >= self.l1_cache_max_size * 0.9:
+            # Si le taux de succès est faible et le cache presque plein, augmenter sa taille
+            old_size = self.l1_cache_max_size
+            self.l1_cache_max_size = min(self.l1_cache_max_size * 2, 10000)  # Limiter à 10000 entrées max
+            self.logger.info(f"Taille du cache L1 augmentée: {old_size} -> {self.l1_cache_max_size}")
+        elif hit_rate > 90 and len(self.l1_cache) < self.l1_cache_max_size * 0.5:
+            # Si le taux de succès est élevé et le cache peu rempli, réduire sa taille
+            old_size = self.l1_cache_max_size
+            self.l1_cache_max_size = max(self.l1_cache_max_size // 2, 100)  # Minimum 100 entrées
+            self.logger.info(f"Taille du cache L1 réduite: {old_size} -> {self.l1_cache_max_size}")
+            
+        # Ajuster le TTL en fonction du taux de succès
+        if hit_rate < 40:
+            old_ttl = self.l1_cache_ttl
+            self.l1_cache_ttl = min(self.l1_cache_ttl * 2, 3600)  # Maximum 1 heure
+            self.logger.info(f"TTL du cache augmenté: {old_ttl}s -> {self.l1_cache_ttl}s")
+        elif hit_rate > 85 and self.l1_cache_ttl > 300:
+            old_ttl = self.l1_cache_ttl
+            self.l1_cache_ttl = max(self.l1_cache_ttl // 2, 300)  # Minimum 5 minutes
+            self.logger.info(f"TTL du cache réduit: {old_ttl}s -> {self.l1_cache_ttl}s")
+
+    async def _cleanup_cache(self):
+        """Nettoie le cache en supprimant les entrées expirées et peu utilisées."""
+        current_time = time.monotonic()
+        keys_to_remove = []
+        
+        # Identifier les entrées expirées
+        for key, timestamp in self.l1_cache_timestamps.items():
+            # Si l'entrée est fréquemment accédée, prolonger son TTL
+            frequency = self.access_frequency.get(key, 0)
+            ttl_multiplier = min(frequency, 10)  # Maximum 10x le TTL standard
+            
+            # Calculer le TTL effectif en fonction de la fréquence d'utilisation
+            effective_ttl = self.l1_cache_ttl * (1 + ttl_multiplier / 10)
+            
+            # Vérifier si l'entrée est expirée
+            if current_time - timestamp > effective_ttl:
+                keys_to_remove.append(key)
+                
+        # Supprimer les entrées expirées
+        removed_count = 0
+        for key in keys_to_remove:
+            if key in self.l1_cache:
+                del self.l1_cache[key]
+                del self.l1_cache_timestamps[key]
+                removed_count += 1
+                
+        self.logger.info(f"Nettoyage du cache: {removed_count} entrées expirées supprimées")
+        
+        # Si après suppression le cache reste trop grand, supprimer les entrées les moins fréquentes
+        if len(self.l1_cache) > self.l1_cache_max_size * 0.9:
+            overage = len(self.l1_cache) - int(self.l1_cache_max_size * 0.8)  # Réduire à 80% pour éviter des nettoyages trop fréquents
+            
+            # Trier les entrées par fréquence d'utilisation (les moins utilisées d'abord)
+            cache_entries = [(k, self.access_frequency.get(k, 0)) for k in self.l1_cache.keys()]
+            cache_entries.sort(key=lambda x: x[1])
+            
+            # Supprimer les entrées les moins utilisées
+            for key, _ in cache_entries[:overage]:
+                if key in self.l1_cache:
+                    del self.l1_cache[key]
+                    if key in self.l1_cache_timestamps:
+                        del self.l1_cache_timestamps[key]
+                    if key in self.access_frequency:
+                        del self.access_frequency[key]
+                    removed_count += 1
+                    
+            self.logger.info(f"Nettoyage complémentaire: {overage} entrées peu utilisées supprimées")
+            
+        # Réduire le compteur de fréquence pour les entrées peu accédées
+        for key in list(self.access_frequency.keys()):
+            if key not in self.l1_cache:
+                del self.access_frequency[key]
+            elif self.access_frequency[key] > 0:
+                # Décroissance progressive pour éviter de pénaliser trop rapidement les entrées
+                self.access_frequency[key] = max(1, int(self.access_frequency[key] * 0.9))
+                
+        return removed_count
+
+    async def preload_frequent_queries(self, queries: List[str]):
+        """
+        Précharge les embeddings pour une liste de requêtes fréquentes.
+        
+        Args:
+            queries: Liste des requêtes fréquentes à précharger
+        
+        Returns:
+            Dict: Informations sur le préchargement
+        """
+        if not queries:
+            return {"status": "error", "message": "Aucune requête fournie"}
+            
+        self.logger.info(f"Préchargement de {len(queries)} requêtes fréquentes")
+        
+        # Générer les embeddings en batch
+        batch_size = 20
+        loaded_count = 0
+        already_cached = 0
+        
+        for i in range(0, len(queries), batch_size):
+            batch = queries[i:i+batch_size]
+            
+            # Vérifier quelles requêtes sont déjà en cache
+            cache_keys = [self._get_cache_key(query) for query in batch]
+            to_generate = []
+            
+            for j, (query, key) in enumerate(zip(batch, cache_keys)):
+                # Vérifier d'abord le cache L1
+                if key in self.l1_cache:
+                    # Marquer comme fréquent pour prolonger sa durée de vie
+                    self.access_frequency[key] += self.frequent_queries_threshold
+                    already_cached += 1
+                    continue
+                    
+                # Vérifier ensuite le cache L2 si disponible
+                if self.l2_cache:
+                    cached = await self.l2_cache.get(key, self.namespace)
+                    if cached:
+                        # Ajouter au cache L1 et marquer comme fréquent
+                        self._update_l1_cache(key, cached)
+                        self.access_frequency[key] += self.frequent_queries_threshold
+                        already_cached += 1
+                        continue
+                        
+                # Si pas en cache, ajouter à la liste pour génération
+                to_generate.append((j, query))
+                
+            # Générer les embeddings manquants
+            if to_generate:
+                texts = [item[1] for item in to_generate]
+                
+                try:
+                    response = await self.client.embeddings.create(
+                        input=texts,
+                        model=self.model
+                    )
+                    
+                    if response.data and len(response.data) == len(texts):
+                        for k, embedding_data in enumerate(response.data):
+                            j, query = to_generate[k]
+                            vector = embedding_data.embedding
+                            
+                            if self._validate_vector(vector):
+                                key = cache_keys[j]
+                                
+                                # Mettre en cache avec priorité élevée
+                                self._update_l1_cache(key, vector)
+                                self.access_frequency[key] += self.frequent_queries_threshold * 2  # Priorité extra haute
+                                
+                                # Mettre aussi dans le cache L2 si disponible
+                                if self.l2_cache:
+                                    asyncio.create_task(self.l2_cache.set(key, vector, self.namespace))
+                                    
+                                loaded_count += 1
+                                
+                except Exception as e:
+                    self.logger.error(f"Erreur lors du préchargement: {str(e)}")
+                    
+            # Pause pour éviter de surcharger l'API
+            if i + batch_size < len(queries):
+                await asyncio.sleep(0.5)
+                
+        self.logger.info(f"Préchargement terminé: {loaded_count} générés, {already_cached} déjà en cache")
+        
+        # Sauvegarder le cache mis à jour
+        await self._save_cache_to_disk()
+        
+        return {
+            "status": "success",
+            "preloaded": loaded_count,
+            "already_cached": already_cached,
+            "total": len(queries)
+        }
+
+    async def _save_cache_to_disk(self):
+        """Sauvegarde le cache L1 sur disque pour persistance."""
+        if not self.cache_file_path:
+            return False
+            
+        try:
+            # Construire la structure de données à sauvegarder
+            cache_data = {
+                "l1_cache": dict(self.l1_cache),
+                "l1_cache_timestamps": dict(self.l1_cache_timestamps),
+                "access_frequency": dict(self.access_frequency),
+                "stats": self.stats,
+                "metadata": {
+                    "dimension": self.dimension,
+                    "model": self.model,
+                    "saved_at": time.time(),
+                    "entry_count": len(self.l1_cache)
+                }
+            }
+            
+            # Sauvegarder dans un fichier temporaire d'abord
+            temp_file = f"{self.cache_file_path}.tmp"
+            
+            with open(temp_file, 'wb') as f:
+                pickle.dump(cache_data, f)
+                
+            # Remplacer le fichier existant de façon atomique
+            os.replace(temp_file, self.cache_file_path)
+            
+            self.logger.info(f"Cache sauvegardé sur disque: {len(self.l1_cache)} entrées")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la sauvegarde du cache: {str(e)}")
+            return False
+
+    def _load_cache_from_disk(self):
+        """Charge le cache depuis le disque au démarrage."""
+        if not self.cache_file_path or not os.path.exists(self.cache_file_path):
+            return False
+            
+        try:
+            with open(self.cache_file_path, 'rb') as f:
+                cache_data = pickle.load(f)
+                
+            # Vérifier la validité des données
+            if not isinstance(cache_data, dict) or "l1_cache" not in cache_data:
+                self.logger.warning("Format de fichier de cache invalide")
+                return False
+                
+            # Vérifier la compatibilité du modèle
+            metadata = cache_data.get("metadata", {})
+            if metadata.get("model") != self.model or metadata.get("dimension") != self.dimension:
+                self.logger.warning(f"Cache incompatible: modèle={metadata.get('model')}, dimension={metadata.get('dimension')}")
+                return False
+                
+            # Charger les données du cache
+            self.l1_cache = OrderedDict(cache_data["l1_cache"])
+            self.l1_cache_timestamps = dict(cache_data.get("l1_cache_timestamps", {}))
+            self.access_frequency = Counter(cache_data.get("access_frequency", {}))
+            
+            # Mettre à jour les statistiques
+            if "stats" in cache_data:
+                self.stats.update(cache_data["stats"])
+                
+            # Limiter la taille du cache
+            if len(self.l1_cache) > self.l1_cache_max_size:
+                # Supprimer les entrées les moins fréquentes
+                entries = [(k, self.access_frequency.get(k, 0)) for k in self.l1_cache]
+                entries.sort(key=lambda x: x[1])
+                
+                # Garder seulement les entrées les plus fréquentes
+                entries_to_keep = entries[-(self.l1_cache_max_size):]
+                keep_keys = {k for k, _ in entries_to_keep}
+                
+                # Reconstruire le cache
+                self.l1_cache = OrderedDict((k, v) for k, v in self.l1_cache.items() if k in keep_keys)
+                self.l1_cache_timestamps = {k: v for k, v in self.l1_cache_timestamps.items() if k in keep_keys}
+                
+            self.logger.info(f"Cache chargé depuis le disque: {len(self.l1_cache)} entrées")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Erreur lors du chargement du cache: {str(e)}")
+            return False
+
     async def get_embedding(self, text: str, force_refresh=False) -> Optional[List[float]]:
         """
         Obtient l'embedding d'un texte avec gestion du cache et des erreurs.
@@ -206,6 +409,8 @@ class EmbeddingService:
             self.hit_count += 1
             self.l1_hit_count += 1
             self.l1_cache_timestamps[cache_key] = time.monotonic()
+            # Incrémenter le compteur de fréquence
+            self.access_frequency[cache_key] += 1
             self.logger.debug(f"Cache L1 hit pour '{text[:30]}...'")
             return self.l1_cache[cache_key]
             
@@ -216,6 +421,8 @@ class EmbeddingService:
                 if cached_vector:
                     # Mise à jour du cache L1
                     self._update_l1_cache(cache_key, cached_vector)
+                    # Incrémenter le compteur de fréquence
+                    self.access_frequency[cache_key] += 1
                     self.hit_count += 1
                     self.l2_hit_count += 1
                     self.logger.debug(f"Cache L2 hit pour '{text[:30]}...'")
@@ -233,95 +440,7 @@ class EmbeddingService:
             self.logger.warning(f"Génération d'embedding lente: {processing_time:.2f}s pour '{text[:30]}...'")
             
         return result
-        
-    async def _generate_embedding(self, text: str, cache_key: str) -> Optional[List[float]]:
-        """
-        Génère un embedding via l'API OpenAI avec gestion des erreurs et mise en cache.
-        
-        Args:
-            text: Texte à encoder
-            cache_key: Clé de cache pré-calculée
-            
-        Returns:
-            Liste de nombres flottants représentant l'embedding, ou None en cas d'erreur
-        """
-        if not self.client:
-            self.logger.error("Client OpenAI non initialisé")
-            return None
-            
-        # Vérifier si une requête identique est déjà en cours (éviter les doublons)
-        lock = self._locks.get(cache_key)
-        if lock and lock.locked():
-            self.logger.debug(f"Requête identique déjà en cours, attente du résultat: '{text[:30]}...'")
-            await lock.acquire()
-            lock.release()
-            # Vérifier si le résultat est maintenant dans le cache
-            if cache_key in self.l1_cache:
-                return self.l1_cache[cache_key]
-                
-        # Créer un verrou pour cette requête
-        if cache_key not in self._locks:
-            self._locks[cache_key] = asyncio.Lock()
-            
-        # Acquérir le verrou
-        async with self._locks[cache_key]:
-            # Génération avec gestion des tentatives
-            start_time = time.monotonic()
-            
-            for attempt in range(self.max_retries):
-                try:
-                    self.total_api_calls += 1
-                    
-                    # Appel API
-                    response = await self.client.embeddings.create(
-                        input=text,
-                        model=self.model
-                    )
-                    
-                    # Mesure du temps d'API
-                    api_time = time.monotonic() - start_time
-                    self.total_api_time += api_time
-                    
-                    # Réinitialisation du compteur d'échecs consécutifs
-                    if self.consecutive_failures > 0:
-                        self.consecutive_failures = 0
-                        
-                    # Traitement de la réponse
-                    if response and response.data and len(response.data) > 0:
-                        vector = response.data[0].embedding
-                        
-                        # Vérification de la taille
-                        if len(vector) != self.dimension:
-                            self.logger.warning(f"Dimension d'embedding inattendue: {len(vector)} au lieu de {self.dimension}")
-                            
-                        # Mise en cache
-                        self._update_l1_cache(cache_key, vector)
-                        if self.l2_cache and self.use_cache:
-                            asyncio.create_task(self.l2_cache.set(cache_key, vector, self.namespace))
-                            
-                        return vector
-                    else:
-                        raise ValueError("Réponse OpenAI vide ou mal formée")
-                        
-                except Exception as e:
-                    self.failed_api_calls += 1
-                    delay = self.retry_base_delay * (2 ** attempt)  # Backoff exponentiel
-                    
-                    if attempt < self.max_retries - 1:
-                        self.logger.warning(f"Échec de génération d'embedding (tentative {attempt+1}/{self.max_retries}): {str(e)}")
-                        await asyncio.sleep(delay)
-                    else:
-                        self.logger.error(f"Échec définitif après {self.max_retries} tentatives: {str(e)}")
-                        self.consecutive_failures += 1
-                        
-                        # Activation du circuit breaker si trop d'échecs consécutifs
-                        if self.consecutive_failures >= self.max_consecutive_failures:
-                            self.circuit_open = True
-                            self.circuit_reset_time = time.monotonic() + self.circuit_timeout
-                            self.logger.error(f"Circuit breaker activé pour {self.circuit_timeout}s après {self.consecutive_failures} échecs consécutifs")
-                            
-                        return None
-                        
+
     def _update_l1_cache(self, cache_key: str, vector: List[float]):
         """
         Met à jour le cache L1 avec un nouvel embedding, en respectant la taille maximale.
@@ -330,175 +449,43 @@ class EmbeddingService:
             cache_key: Clé de cache
             vector: Vecteur d'embedding à stocker
         """
-        # Si le cache est plein, supprimer l'élément le plus ancien
+        # Si le cache est presque plein, nettoyer en fonction de la fréquence d'utilisation
         if len(self.l1_cache) >= self.l1_cache_max_size:
-            oldest_key = next(iter(self.l1_cache))
-            del self.l1_cache[oldest_key]
-            if oldest_key in self.l1_cache_timestamps:
-                del self.l1_cache_timestamps[oldest_key]
+            # Plutôt que de simplement supprimer l'élément le plus ancien,
+            # on supprime l'élément le moins fréquemment utilisé
+            if self.access_frequency:
+                # Identifier les candidats à supprimer (les 10% moins utilisés)
+                candidates = [(k, self.access_frequency.get(k, 0)) 
+                             for k in self.l1_cache.keys()]
+                candidates.sort(key=lambda x: x[1])
+                
+                # Supprimer un élément parmi les moins utilisés
+                if candidates:
+                    oldest_key = candidates[0][0]
+                    del self.l1_cache[oldest_key]
+                    if oldest_key in self.l1_cache_timestamps:
+                        del self.l1_cache_timestamps[oldest_key]
+            else:
+                # Fallback au comportement LRU si pas de données de fréquence
+                oldest_key = next(iter(self.l1_cache))
+                del self.l1_cache[oldest_key]
+                if oldest_key in self.l1_cache_timestamps:
+                    del self.l1_cache_timestamps[oldest_key]
                 
         # Ajouter le nouvel élément
         self.l1_cache[cache_key] = vector
         self.l1_cache_timestamps[cache_key] = time.monotonic()
-        
-    async def get_batch_embeddings(self, texts: List[str], force_refresh=False) -> List[Optional[List[float]]]:
-        """
-        Génère des embeddings pour plusieurs textes en batch.
-        
-        Args:
-            texts: Liste de textes à transformer
-            force_refresh: Force la régénération même si présent en cache
-            
-        Returns:
-            Liste des embeddings (None pour les textes échoués)
-        """
-        if not texts:
-            return []
-            
-        # Traitement optimisé des textes par lots
-        batch_size = 20  # Taille de lot recommandée par OpenAI
-        results = [None] * len(texts)
-        
-        # Optimisation : vérification du cache en premier pour tous les textes
-        if not force_refresh:
-            cache_keys = [self._get_cache_key(text) for text in texts]
-            cache_lookups = await asyncio.gather(*[self.l2_cache.get(key, self.namespace) for key in cache_keys])
-            
-            # Utilisation des valeurs en cache
-            to_generate = []  # Indices des textes à générer
-            generation_failures = 0  # Compteur d'échecs pour limiter les tentatives
-            
-            for i, (text, cached) in enumerate(zip(texts, cache_lookups)):
-                if cached:
-                    results[i] = cached
-                    self.stats["hits"] += 1
-                else:
-                    to_generate.append(i)
-                    self.stats["misses"] += 1
-                    
-            if not to_generate:
-                return results  # Tous les textes sont en cache
-            if generation_failures > 0:
-                await asyncio.sleep(generation_failures * 0.5)  # Pause progressive
-        else:
-            to_generate = list(range(len(texts)))
-            
-        # Génération par lots pour les textes manquants
-        for i in range(0, len(to_generate), batch_size):
-            batch_indices = to_generate[i:i+batch_size]
-            batch_texts = [texts[idx] for idx in batch_indices]
-            
-            try:
-                # Génération en batch
-                response = await self.client.embeddings.create(
-                    input=batch_texts,
-                    model=self.model
-                )
-                
-                # Traitement des résultats
-                if response.data and len(response.data) == len(batch_texts):
-                    for j, embedding_data in enumerate(response.data):
-                        original_idx = batch_indices[j]
-                        vector = embedding_data.embedding
-                        
-                        if self._validate_vector(vector):
-                            results[original_idx] = vector
-                            
-                            # Mise en cache
-                            cache_key = self._get_cache_key(texts[original_idx])
-                            asyncio.create_task(self.l2_cache.set(cache_key, vector, self.namespace))
-                else:
-                    self.logger.error(f"Réponse OpenAI incomplète: {len(response.data)} résultats pour {len(batch_texts)} textes")
-                    
-            except Exception as e:
-                self.logger.error(f"Erreur génération batch: {str(e)}")
-                
-                # Fallback: génération individuelle pour ce batch
-                for idx in batch_indices:
-                    results[idx] = await self.get_embedding(texts[idx], force_refresh)
-        
-        return results
-    
-    async def get_embeddings_map(self, texts_dict: Dict[str, str], force_refresh=False) -> Dict[str, Optional[List[float]]]:
-        """
-        Génère des embeddings pour un dictionnaire de textes.
-        
-        Args:
-            texts_dict: Dictionnaire {id: texte}
-            force_refresh: Force la régénération
-            
-        Returns:
-            Dictionnaire {id: embedding}
-        """
-        keys = list(texts_dict.keys())
-        texts = [texts_dict[k] for k in keys]
-        
-        embeddings = await self.get_batch_embeddings(texts, force_refresh)
-        
-        return {k: embeddings[i] for i, k in enumerate(keys)}
-    
-    def cosine_similarity(self, vector1: List[float], vector2: List[float]) -> float:
-        """
-        Calcule la similarité cosinus entre deux vecteurs.
-        
-        Args:
-            vector1, vector2: Vecteurs à comparer
-            
-        Returns:
-            Score de similarité entre 0 et 1
-        """
-        if not vector1 or not vector2:
-            return 0.0
-            
-        # Conversion en numpy pour optimisation
-        v1 = np.array(vector1)
-        v2 = np.array(vector2)
-        
-        # Normalisation des vecteurs
-        v1_norm = np.linalg.norm(v1)
-        v2_norm = np.linalg.norm(v2)
-        
-        if v1_norm == 0 or v2_norm == 0:
-            return 0.0
-            
-        # Calcul de similarité
-        return np.dot(v1, v2) / (v1_norm * v2_norm)
-    
-    async def find_similar_texts(self, query: str, candidates: List[str], threshold: float = 0.8) -> List[Tuple[int, float]]:
-        """
-        Trouve les textes similaires à une requête parmi une liste de candidats.
-        
-        Args:
-            query: Texte de requête
-            candidates: Liste des textes candidats
-            threshold: Seuil minimal de similarité (0-1)
-            
-        Returns:
-            Liste de tuples (indice, score) des textes similaires
-        """
-        # Génération de l'embedding de la requête
-        query_embedding = await self.get_embedding(query)
-        if not query_embedding:
-            return []
-            
-        # Génération des embeddings des candidats
-        candidate_embeddings = await self.get_batch_embeddings(candidates)
-        
-        # Calcul des similarités
-        similarities = []
-        for i, embedding in enumerate(candidate_embeddings):
-            if embedding:
-                similarity = self.cosine_similarity(query_embedding, embedding)
-                if similarity >= threshold:
-                    similarities.append((i, similarity))
-                    
-        # Tri par similarité décroissante
-        return sorted(similarities, key=lambda x: x[1], reverse=True)
-    
+        # Initialiser ou incrémenter le compteur de fréquence
+        self.access_frequency[cache_key] = self.access_frequency.get(cache_key, 0) + 1
+
     def get_stats(self):
         """Retourne les statistiques d'utilisation."""
         total = self.stats["hits"] + self.stats["misses"]
         hit_rate = (self.stats["hits"] / total) * 100 if total > 0 else 0
+        
+        # Calculer des statistiques avancées sur le cache
+        frequent_entries = sum(1 for v in self.access_frequency.values() if v >= self.frequent_queries_threshold)
+        avg_frequency = sum(self.access_frequency.values()) / len(self.access_frequency) if self.access_frequency else 0
         
         return {
             "hits": self.stats["hits"],
@@ -510,5 +497,10 @@ class EmbeddingService:
             "l2_hit_count": self.l2_hit_count,
             "total_api_calls": self.total_api_calls,
             "total_api_time": self.total_api_time,
-            "failed_api_calls": self.failed_api_calls
+            "failed_api_calls": self.failed_api_calls,
+            "cache_size": len(self.l1_cache),
+            "cache_max_size": self.l1_cache_max_size,
+            "frequent_entries": frequent_entries,
+            "average_frequency": f"{avg_frequency:.1f}",
+            "cache_ttl": self.l1_cache_ttl
         }
