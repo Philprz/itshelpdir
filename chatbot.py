@@ -398,23 +398,28 @@ class ChatBot:
                 
                 results = await client.recherche_intelligente(
                     question=question,
-                    client_name=client_value,  # Utiliser la valeur extraite
+                    client_name=client_value,
                     date_debut=date_debut,
                     date_fin=date_fin,
-                    limit=search_limit,
-                    score_threshold=score_min,
-                    vector_field="vector"
+                    limit=search_limit
                 )
-
-                duration = time.monotonic() - task_start_time
-                scores = [f'{r.score:.2f}' for r in results[:3]] if results else []
-                self.logger.info(f"{source_type}: {len(results)} résultats en {duration:.2f}s (scores: {scores})")
-
-                return source_type, results
+                
+                # Formatage du log avec les scores des 3 premiers résultats pour debug
+                scores_str = []
+                for i, r in enumerate(results[:3]):
+                    if hasattr(r, 'score'):
+                        scores_str.append(f"{r.score:.2f}")
+                    elif isinstance(r, dict) and 'score' in r:
+                        scores_str.append(f"{r['score']:.2f}")
+                
+                elapsed = time.monotonic() - task_start_time
+                self.logger.info(f"{source_type}: {len(results)} résultats en {elapsed:.2f}s (scores: {scores_str})")
+                
+                return results
             except Exception as e:
                 self.logger.error(f"Erreur recherche {source_type}: {str(e)}")
-                return source_type, []
-
+                return []
+        
         # Exécution en fonction de la priorisation
         executed_sources = set()
 
@@ -547,157 +552,38 @@ class ChatBot:
         Returns:
             Dictionnaire formaté pour l'interface web
         """
-        self.logger.info(f"Formatage de {len(results)} résultats. Progressive={progressive}, Debug Zendesk={debug_zendesk}")
-        
-        # En cas d'absence de résultats
-        if not results:
-            no_results_blocks = [{
+        # Limitation du nombre de résultats pour éviter des réponses trop longues
+        max_results = 5
+        if len(results) > max_results:
+            self.logger.info(f"Limitation à {max_results} résultats sur {len(results)} disponibles")
+            results = results[:max_results]
+
+        # En-tête avec information sur le nombre de résultats
+        header_blocks = []
+        if question:
+            header_text = f"*Résultats pour:* {question}\n\n"
+            if len(results) > 0:
+                header_text += f"J'ai trouvé {len(results)} résultats pertinents."
+            else:
+                header_text += "Je n'ai pas trouvé de résultats pertinents."
+                
+            header_blocks.append({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": "Aucun résultat pertinent trouvé"
+                    "text": header_text
                 }
-            }]
-
-            # Ajout de suggestions si question fournie
-            if question:
-                no_results_blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": "Essayez de reformuler votre question ou d'ajouter plus de détails."
-                    }
-                })
-
-                # Suggestions de recherches alternatives
-                no_results_blocks.append({
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "Recherche générale"
-                            },
-                            "value": f"search_general:{question}"
-                        },
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "Documentation"
-                            },
-                            "value": f"search_docs:{question}"
-                        }
-                    ]
-                })
-
-            return {
-                "text": "Aucun résultat pertinent trouvé.",
-                "blocks": no_results_blocks
-            }
-
-        # Construction de l'en-tête des résultats
-        header_blocks = [{
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": f"Résultats de recherche ({len(results)})",
-                "emoji": True
-            }
-        }]
-
-        # Ajout d'un contexte si question fournie
-        if question:
-            header_blocks.append({
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": f"*Question:* {question}"
-                    }
-                ]
             })
+            header_blocks.append({"type": "divider"})
 
-        # Récupération des types de sources pour le résumé
+        # Comptage des types de sources
         source_types = {}
         for r in results:
             try:
-                # Détection du payload selon le format de l'objet
-                if isinstance(r, dict):
-                    # Format dictionnaire
-                    p = r.get('payload', {})
-                elif hasattr(r, 'payload'):
-                    # Format objet avec attribut 'payload'
-                    if isinstance(r.payload, dict):
-                        p = r.payload
-                    elif hasattr(r.payload, '__dict__'):
-                        p = r.payload.__dict__
-                    else:
-                        p = {}
-                else:
-                    # Fallback
-                    p = {}
-                    
-                # Si source_type est présent dans le payload, l'utiliser directement
-                if 'source_type' in p:
-                    source_type = p['source_type']
-                else:
-                    # Détection basée sur les champs présents
-                    if 'key' in p: 
-                        source_type = 'jira'
-                    elif 'ticket_id' in p: 
-                        source_type = 'zendesk'
-                    elif 'space_id' in p: 
-                        source_type = 'confluence'
-                    elif 'pdf_path' in p:
-                        source_type = 'netsuite_dummies' if 'dummy' in str(p.get('title','')).lower() else 'sap'
-                    elif 'url' in p and 'content' in p:
-                        source_type = 'netsuite'
-                    elif 'title' in p and 'text' in p:
-                        source_type = 'sap'
-                    else:
-                        # Détection basée sur des attributs additionnels
-                        if any(key in str(p.keys()).lower() for key in ['jira', 'issue']):
-                            source_type = 'jira'
-                        else:
-                            # Détection basée sur le nom de collection si disponible
-                            if hasattr(r, 'collection_name'):
-                                collection = r.collection_name.lower()
-                                if 'jira' in collection:
-                                    source_type = 'jira'
-                                elif 'zendesk' in collection:
-                                    source_type = 'zendesk'
-                                elif 'confluence' in collection:
-                                    source_type = 'confluence'
-                                elif 'netsuite_dummies' in collection:
-                                    source_type = 'netsuite_dummies'
-                                elif 'netsuite' in collection:
-                                    source_type = 'netsuite'
-                                elif 'sap' in collection:
-                                    source_type = 'sap'
-                                else:
-                                    source_type = 'unknown'
-                            else:
-                                source_type = 'unknown'
+                source_type = self._detect_source_type(r)
                 source_types[source_type] = source_types.get(source_type, 0) + 1
             except Exception as e:
-                self.logger.error(f"Erreur lors de la détection du type de source: {str(e)}")
-
-        # Ajout du résumé des sources
-        source_summary = " | ".join([f"{count} {src.upper()}" for src, count in source_types.items()])
-        header_blocks.append({
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Sources:* {source_summary}"
-                }
-            ]
-        })
-
-        # Séparateur avant les résultats
-        header_blocks.append({"type": "divider"})
+                self.logger.error(f"Erreur comptage type source: {str(e)}")
 
         # Formatage des résultats individuels
         formatted_blocks = []
@@ -713,6 +599,28 @@ class ChatBot:
             self.logger.error("Aucun client de recherche disponible")
             return []
 
+        # Fonction commune pour extraire le payload et le score d'un résultat
+        def extract_result_data(result):
+            """Extrait le payload et le score d'un résultat de manière standardisée."""
+            try:
+                payload = {}
+                score = 0.0
+                
+                if isinstance(result, dict):
+                    payload = result.get('payload', {}) if isinstance(result.get('payload'), dict) else result
+                    score = float(result.get('score', 0.0))
+                else:
+                    if hasattr(result, 'payload'):
+                        payload = result.payload if isinstance(result.payload, dict) else getattr(result.payload, '__dict__', {})
+                    else:
+                        payload = getattr(result, '__dict__', {})
+                    score = float(getattr(result, 'score', 0.0))
+                
+                return payload, score
+            except Exception as e:
+                self.logger.error(f"Erreur extraction données résultat: {str(e)}")
+                return {}, 0.0
+
         # Mode de formatage progressif si activé
         if progressive:
             self.logger.info("Utilisation du mode de formatage progressif")
@@ -720,21 +628,14 @@ class ChatBot:
             # Formatage individuel pour chaque résultat avec gestion des erreurs individuelles
             for i, r in enumerate(results):
                 try:
-                    # Extraction du payload et du score
-                    if isinstance(r, dict):
-                        payload = r.get('payload', {})
-                        score = float(r.get('score', 0.0))
-                    else:
-                        payload = r.payload if isinstance(r.payload, dict) else getattr(r.payload, '__dict__', {})
-                        score = float(getattr(r, 'score', 0.0))
+                    # Extraction standardisée du payload et du score
+                    payload, score = extract_result_data(r)
 
                     # Détection de la source
                     source_type = self._detect_source_type(r)
                     
-                    # Format de base en cas d'échec du formatage spécifique
-                    basic_block = None
-                    
                     # Essayer d'utiliser le client spécialisé pour la source
+                    formatted_block = None
                     try:
                         if source_type in source_clients:
                             source_client = source_clients[source_type]
@@ -882,34 +783,31 @@ class ChatBot:
                     })
                     formatted_blocks.append({"type": "divider"})
         else:
-            # Formatage de chaque résultat en utilisant les clients de recherche (code original)
-            for r in results:
+            # Formatage de chaque résultat en utilisant les clients de recherche
+            for i, r in enumerate(results):
                 try:
-                    # Extraction du payload et du score
-                    if isinstance(r, dict):
-                        payload = r.get('payload', {})
-                        score = float(r.get('score', 0.0))
-                    else:
-                        payload = r.payload if isinstance(r.payload, dict) else getattr(r.payload, '__dict__', {})
-                        score = float(getattr(r, 'score', 0.0))
+                    # Extraction standardisée du payload et du score
+                    payload, score = extract_result_data(r)
 
                     # Détection de la source
                     source_type = self._detect_source_type(r)
                     
                     # Formatage via client spécialisé si disponible
-                    if source_type in source_clients:
-                        source_client = source_clients[source_type]
-                        formatted_block = await source_client.format_for_slack(r)
-                        if formatted_block and isinstance(formatted_block, dict) and formatted_block.get("type"):
-                            formatted_blocks.append(formatted_block)
-                            formatted_blocks.append({"type": "divider"})
-                            continue
-                        else:
-                            # Log et continue avec le prochain résultat sans utiliser le formatage par défaut
-                            current_source_type = self._detect_source_type(r)
-                            self.logger.warning(f"Bloc formaté invalide pour {current_source_type}")
-                        
-                    # Sinon, fallback au formatage de base (code original conservé)
+                    formatted_block = None
+                    try:
+                        if source_type in source_clients:
+                            source_client = source_clients[source_type]
+                            formatted_block = await source_client.format_for_slack(r)
+                            if formatted_block and isinstance(formatted_block, dict) and formatted_block.get("type"):
+                                formatted_blocks.append(formatted_block)
+                                formatted_blocks.append({"type": "divider"})
+                                continue
+                            else:
+                                self.logger.warning(f"Bloc formaté invalide pour {source_type} (résultat #{i+1}), utilisation du formatage par défaut")
+                    except Exception as format_error:
+                        self.logger.error(f"Erreur lors du formatage spécifique pour {source_type} (résultat #{i+1}): {str(format_error)}")
+                    
+                    # Formatage par défaut si le client spécialisé a échoué
                     score_percent = round(score * 100)
                     fiabilite = "🟢" if score_percent > 80 else "🟡" if score_percent > 60 else "🔴"
 
@@ -1137,65 +1035,71 @@ class ChatBot:
             return 'N/A'
     
     def _detect_source_type(self, result) -> str:
+        """Détecte le type de source d'un résultat."""
         try:
-            # Détection du payload selon le format de l'objet
+            # Tentative d'extraction directe depuis un attribut .metadata
+            if hasattr(result, 'metadata') and hasattr(result.metadata, 'source'):
+                return result.metadata.source.lower()
+                
+            # Tentative d'extraction depuis un attribut .payload.source
+            if hasattr(result, 'payload'):
+                if isinstance(result.payload, dict) and 'source' in result.payload:
+                    return result.payload['source'].lower()
+                elif hasattr(result.payload, 'source'):
+                    return result.payload.source.lower()
+                    
+            # Tentative d'extraction depuis un dictionnaire
             if isinstance(result, dict):
-                # Format dictionnaire
-                p = result.get('payload', {})
-            elif hasattr(result, 'payload'):
-                # Format objet avec attribut 'payload'
-                if isinstance(result.payload, dict):
-                    p = result.payload
-                elif hasattr(result.payload, '__dict__'):
-                    p = result.payload.__dict__
-                else:
-                    p = {}
+                if 'metadata' in result and 'source' in result['metadata']:
+                    return result['metadata']['source'].lower()
+                elif 'payload' in result and isinstance(result['payload'], dict) and 'source' in result['payload']:
+                    return result['payload']['source'].lower()
+                elif 'source' in result:
+                    return result['source'].lower()
+                    
+            # Détection basée sur les champs spécifiques
+            payload = {}
+            if isinstance(result, dict):
+                payload = result.get('payload', {}) if isinstance(result.get('payload'), dict) else result
             else:
-                # Fallback
-                p = {}
-                
-            # Si source_type est présent dans le payload, l'utiliser directement
-            if 'source_type' in p:
-                return p['source_type']
-                
-            # Détection basée sur les champs présents
-            if 'key' in p: 
+                if hasattr(result, 'payload'):
+                    payload = result.payload if isinstance(result.payload, dict) else getattr(result.payload, '__dict__', {})
+                else:
+                    payload = getattr(result, '__dict__', {})
+                    
+            # Détection par champs caractéristiques
+            if any(k in payload for k in ['key', 'issuetype']):
                 return 'jira'
-            if 'ticket_id' in p: 
+            elif any(k in payload for k in ['ticket_id']):
                 return 'zendesk'
-            if 'space_id' in p: 
+            elif any(k in payload for k in ['space_id', 'page_id']):
                 return 'confluence'
-            if 'pdf_path' in p:
-                return 'netsuite_dummies' if 'dummy' in str(p.get('title','')).lower() else 'sap'
-            if 'url' in p and 'content' in p:
-                return 'netsuite'
-            if 'title' in p and 'text' in p:
+            elif 'pdf_path' in payload and any(k in payload for k in ['title', 'text']):
+                return 'netsuite_dummies'
+            elif any(k in payload for k in ['erp_type']) and payload.get('erp_type') == 'sap':
                 return 'sap'
-            
-            # Détection basée sur des attributs additionnels
-            if any(key in str(p.keys()).lower() for key in ['jira', 'issue']):
-                return 'jira'
+            elif any(k in payload for k in ['erp_type']) and payload.get('erp_type') == 'netsuite':
+                return 'netsuite'
                 
-            # Détection basée sur le nom de collection si disponible
-            if hasattr(result, 'collection_name'):
-                collection = result.collection_name.lower()
-                if 'jira' in collection:
+            # Fallback: détection par URL si présente
+            url = payload.get('url', '')
+            if isinstance(url, str):
+                if 'atlassian' in url or 'jira' in url:
                     return 'jira'
-                if 'zendesk' in collection:
+                elif 'zendesk' in url:
                     return 'zendesk'
-                if 'confluence' in collection:
+                elif 'confluence' in url:
                     return 'confluence'
-                if 'netsuite_dummies' in collection:
-                    return 'netsuite_dummies'
-                if 'netsuite' in collection:
+                elif 'netsuite' in url:
                     return 'netsuite'
-                if 'sap' in collection:
+                elif 'sap' in url:
                     return 'sap'
-                
-            return 'unknown'
+                    
+            # Fallback par défaut
+            return 'generic'
             
         except Exception as e:
-            self.logger.error(f"Erreur détection type source: {str(e)}")
+            self.logger.error(f"Erreur détection source: {str(e)}")
             return 'unknown'
     
     async def generate_guide(self, results: List[Any], question: str) -> str:
