@@ -523,3 +523,190 @@ class EmbeddingService:
             "average_frequency": f"{avg_frequency:.1f}",
             "cache_ttl": self.l1_cache_ttl
         }
+        
+    async def _check_circuit_breaker(self):
+        """
+        Vérifie l'état du circuit breaker avant de faire un appel API.
+        
+        Le circuit breaker est un mécanisme de protection qui bloque temporairement
+        les requêtes en cas d'erreurs répétées pour éviter de surcharger l'API.
+        
+        Returns:
+            bool: True si le circuit est fermé (requêtes autorisées), False sinon
+        """
+        # Si le circuit est fermé, autoriser la requête
+        if not self.circuit_open:
+            return True
+            
+        # Si le circuit est ouvert, vérifier si le temps de réinitialisation est passé
+        current_time = time.monotonic()
+        if self.circuit_reset_time and current_time >= self.circuit_reset_time:
+            # Fermer le circuit et réinitialiser le compteur d'erreurs
+            self.logger.info("Circuit breaker réinitialisé après timeout")
+            self.circuit_open = False
+            self.consecutive_failures = 0
+            self.circuit_reset_time = None
+            return True
+            
+        # Circuit toujours ouvert et timeout non atteint
+        return False
+        
+    def _get_cache_key(self, text: str) -> str:
+        """
+        Génère une clé de cache unique pour le texte donné.
+        
+        Args:
+            text: Texte à encoder
+            
+        Returns:
+            Chaîne de caractères représentant la clé de cache
+        """
+        # Utilisation d'un hachage simple pour générer une clé de cache
+        import hashlib
+        text_normalized = text.strip().lower()
+        return f"{self.model}_{hashlib.md5(text_normalized.encode('utf-8')).hexdigest()}"
+        
+    def _validate_vector(self, vector):
+        """
+        Vérifie qu'un vecteur d'embedding est valide.
+        
+        Args:
+            vector: Vecteur à valider
+            
+        Returns:
+            bool: True si le vecteur est valide, False sinon
+        """
+        if not vector or not isinstance(vector, list):
+            return False
+            
+        # Vérifier la dimension
+        if len(vector) != self.dimension:
+            self.logger.warning(f"Dimension incorrecte: {len(vector)} (attendu: {self.dimension})")
+            return False
+            
+        # Vérifier que tous les éléments sont des nombres
+        if not all(isinstance(x, (int, float)) for x in vector):
+            self.logger.warning("Le vecteur contient des éléments non numériques")
+            return False
+            
+        return True
+        
+    async def _generate_embedding(self, text: str, cache_key: str = None):
+        """
+        Génère un embedding via l'API OpenAI avec gestion des erreurs et circuit breaker.
+        
+        Args:
+            text: Texte à encoder
+            cache_key: Clé de cache (optionnelle)
+            
+        Returns:
+            Liste de nombres flottants représentant l'embedding, ou None en cas d'erreur
+        """
+        # Si pas de client, on ne peut pas générer d'embedding
+        if not self.client:
+            self.logger.error("Pas de client OpenAI disponible")
+            return None
+            
+        # Si pas de clé de cache fournie, la générer
+        if not cache_key:
+            cache_key = self._get_cache_key(text)
+            
+        # Vérifier si un lock existe déjà pour cette requête
+        lock_key = f"lock_{cache_key}"
+        if lock_key in self._locks:
+            # Une requête identique est en cours, attendre qu'elle termine
+            self.logger.debug(f"Requête dupliquée pour '{text[:30]}...', attente du résultat existant")
+            try:
+                return await self._locks[lock_key]
+            except Exception:
+                # Si la requête existante a échoué, continuer avec une nouvelle requête
+                pass
+                
+        # Créer un future pour stocker le résultat et le rendre disponible pour les requêtes dupliquées
+        future = asyncio.Future()
+        self._locks[lock_key] = future
+        
+        try:
+            # Tentatives avec backoff exponentiel
+            for attempt in range(1, self.max_retries + 1):
+                start_time = time.monotonic()
+                self.total_api_calls += 1
+                
+                try:
+                    # Appel API OpenAI pour générer l'embedding
+                    response = await self.client.embeddings.create(
+                        input=text,
+                        model=self.model
+                    )
+                    
+                    # Mesurer le temps d'appel API
+                    api_time = time.monotonic() - start_time
+                    self.total_api_time += api_time
+                    
+                    # Extraire le vecteur d'embedding
+                    if response.data and len(response.data) > 0:
+                        vector = response.data[0].embedding
+                        
+                        # Valider le vecteur
+                        if self._validate_vector(vector):
+                            # Réinitialiser le compteur d'erreurs
+                            self.consecutive_failures = 0
+                            
+                            # Mettre en cache
+                            self._update_l1_cache(cache_key, vector)
+                            
+                            # Si cache L2 disponible, l'utiliser aussi
+                            if self.l2_cache:
+                                asyncio.create_task(self.l2_cache.set(cache_key, vector, self.namespace))
+                                
+                            # Incrémenter le compteur de fréquence d'accès
+                            self.access_frequency[cache_key] = self.access_frequency.get(cache_key, 0) + 1
+                            
+                            # Compléter le future pour les requêtes dupliquées
+                            if not future.done():
+                                future.set_result(vector)
+                                
+                            self.logger.debug(f"Embedding généré pour '{text[:30]}...' en {api_time:.2f}s")
+                            return vector
+                        else:
+                            self.logger.warning(f"Vecteur invalide reçu pour '{text[:30]}...'")
+                            
+                    else:
+                        self.logger.warning(f"Réponse OpenAI sans données pour '{text[:30]}...'")
+                        
+                    # En cas de réponse incorrecte mais pas d'exception, on incrémente quand même le compteur d'erreurs
+                    self.consecutive_failures += 1
+                    self.failed_api_calls += 1
+                    
+                except Exception as e:
+                    # Gestion des erreurs
+                    self.consecutive_failures += 1
+                    self.failed_api_calls += 1
+                    
+                    if attempt < self.max_retries:
+                        # Backoff exponentiel avant nouvelle tentative
+                        delay = self.retry_base_delay * (2 ** (attempt - 1))
+                        self.logger.warning(f"Erreur lors de la génération d'embedding (tentative {attempt}/{self.max_retries}): {str(e)}. Nouvelle tentative dans {delay}s")
+                        await asyncio.sleep(delay)
+                    else:
+                        self.logger.error(f"Échec final après {self.max_retries} tentatives: {str(e)}")
+                        
+                        # Mettre à jour les stats
+                        self.stats["errors"] += 1
+                
+            # Vérifier si on doit ouvrir le circuit breaker
+            if self.consecutive_failures >= self.max_consecutive_failures:
+                self.circuit_open = True
+                self.circuit_reset_time = time.monotonic() + self.circuit_timeout
+                self.logger.warning(f"Circuit breaker ouvert après {self.consecutive_failures} échecs consécutifs. Réinitialisation dans {self.circuit_timeout}s")
+                
+            # Si on arrive ici, toutes les tentatives ont échoué
+            if not future.done():
+                future.set_exception(Exception(f"Échec après {self.max_retries} tentatives"))
+                
+            return None
+                
+        finally:
+            # Supprimer le lock une fois terminé
+            if lock_key in self._locks:
+                del self._locks[lock_key]
