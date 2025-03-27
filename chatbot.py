@@ -15,10 +15,8 @@ from openai import AsyncOpenAI
 from gestion_clients import extract_client_name
 
 # Importation de la factory (pas de dépendance circulaire ici)
-from search_factory import search_factory
-
-# Import nécessaire partout dans le code
-from base_de_donnees import global_cache
+from search_factory_compat import search_factory
+from configuration import global_cache
 
 # Déplacement à l'intérieur des méthodes pour éviter les cycles
 # from embedding_service import EmbeddingService
@@ -43,8 +41,8 @@ class ChatBot:
         self.openai_client = AsyncOpenAI(api_key=openai_key)
         
         # Initialisation des services avec imports locaux pour éviter les cycles
-        from embedding_service import EmbeddingService
-        from translation_service import TranslationService
+        from embedding_service_compat import EmbeddingService
+        from translation_service_compat import TranslationService
         
         self.embedding_service = EmbeddingService(self.openai_client, global_cache)
         self.translation_service = TranslationService(None, global_cache)
@@ -403,6 +401,20 @@ class ChatBot:
                     date_fin=date_fin,
                     limit=search_limit
                 )
+                
+                # Filtrage des résultats selon le score minimal
+                filtered_results = []
+                for result in results:
+                    score = None
+                    if hasattr(result, 'score'):
+                        score = result.score
+                    elif isinstance(result, dict) and 'score' in result:
+                        score = result['score']
+                    
+                    if score is None or score >= score_min:
+                        filtered_results.append(result)
+                
+                results = filtered_results
                 
                 # Formatage du log avec les scores des 3 premiers résultats pour debug
                 scores_str = []

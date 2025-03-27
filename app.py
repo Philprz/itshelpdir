@@ -162,16 +162,14 @@ class ApplicationContext:
     
     async def init_search_factory(self):
         """Initialise la factory de recherche"""
-        from search_factory import search_factory
-        self.logger.info("Initialisation de la factory de recherche")
         try:
-            # Initialisation de la factory de recherche
+            from search_factory_compat import search_factory
             await search_factory.initialize()
-            return True
+            self.logger.info("Factory de recherche initialisée avec succès")
         except Exception as e:
-            self.logger.error(f"Erreur lors de l'initialisation de la factory de recherche: {str(e)}")
-            self.errors.append(str(e))
-            return False
+            self.errors.append(f"Erreur d'initialisation de la factory: {str(e)}")
+            self.logger.error(f"Erreur d'initialisation de la factory: {str(e)}")
+            traceback.print_exc()
     
     async def init_chatbot(self):
         """Initialise le chatbot"""
