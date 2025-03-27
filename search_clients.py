@@ -6,8 +6,7 @@ archivées des clients de recherche et l'application principale.
 """
 
 import logging
-import os
-from typing import Dict, Any, Optional, List
+from typing import Any, Optional
 
 logger = logging.getLogger('ITS_HELP.search_clients')
 

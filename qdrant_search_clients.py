@@ -5,14 +5,12 @@ Ce module définit la factory pour créer des clients de recherche
 spécialisés utilisant Qdrant comme base de données vectorielle.
 """
 
-import os
 import logging
-from typing import Dict, Any, Optional
+from typing import Any
 
 # Import sécurisé pour éviter les erreurs d'importation circulaire
 try:
     from qdrant_client import QdrantClient
-    from qdrant_client.http.models import Distance, VectorParams
     QDRANT_AVAILABLE = True
 except ImportError:
     QDRANT_AVAILABLE = False
