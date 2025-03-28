@@ -34,6 +34,15 @@ class TranslationService:
         self.call_count = 0
         self.error_count = 0
         
+    def set_async_client(self, openai_client):
+        """
+        Définit le client OpenAI à utiliser pour les appels asynchrones.
+        
+        Args:
+            openai_client: Client OpenAI pour les appels asynchrones
+        """
+        self.openai_client = openai_client
+        
     async def translate(self, text: str, source_lang: str = "auto", target_lang: str = "fr") -> str:
         """
         Traduit un texte d'une langue source vers une langue cible.
