@@ -63,9 +63,21 @@ except ImportError:
             # Vérifier dans le cache si disponible
             if self.cache:
                 try:
-                    cached_embedding = self.cache.get_embedding(text)
-                    if cached_embedding:
-                        return cached_embedding
+                    # Ne pas utiliser l'objet cache directement dans une sérialisation JSON
+                    # Utiliser une clé dérivée du texte pour le stockage des embeddings
+                    cache_key = self._generate_cache_key(text)
+                    embedding = None
+                    
+                    # Tenter de récupérer depuis le cache de manière asynchrone
+                    try:
+                        embedding = await self.cache.get(cache_key, namespace="embeddings")
+                    except AttributeError:
+                        # Si c'est un cache synchrone sans méthode async
+                        if hasattr(self.cache, "get_embedding"):
+                            embedding = self.cache.get_embedding(text)
+                            
+                    if embedding:
+                        return embedding
                 except Exception as e:
                     self.logger.warning(f"Erreur lors de l'accès au cache: {str(e)}")
                     # Continuer même si le cache échoue
@@ -73,7 +85,23 @@ except ImportError:
             # Générer l'embedding avec le client configuré
             try:
                 if self.openai_client:
-                    return await self._get_openai_embedding(text)
+                    embedding = await self._get_openai_embedding(text)
+                    
+                    # Stocker dans le cache si disponible
+                    if self.cache and embedding:
+                        try:
+                            cache_key = self._generate_cache_key(text)
+                            # Tenter de stocker de manière asynchrone
+                            try:
+                                await self.cache.set(cache_key, embedding, namespace="embeddings")
+                            except AttributeError:
+                                # Si c'est un cache synchrone sans méthode async
+                                if hasattr(self.cache, "set_embedding"):
+                                    self.cache.set_embedding(text, embedding)
+                        except Exception as e:
+                            self.logger.warning(f"Erreur lors de la mise en cache: {str(e)}")
+                            
+                    return embedding
                 else:
                     self.logger.error("Aucun client configuré pour la génération d'embeddings")
                     return [0.0] * 1536  # Embedding par défaut
@@ -97,6 +125,25 @@ except ImportError:
             
             return text
             
+        def _generate_cache_key(self, text: str) -> str:
+            """
+            Génère une clé unique pour le cache basée sur le texte.
+            Évite de passer l'objet texte complet pour la sérialisation.
+            
+            Args:
+                text: Texte pour lequel générer une clé
+                
+            Returns:
+                Clé unique pour le cache
+            """
+            import hashlib
+            # Créer un hash du texte normalisé pour l'utiliser comme clé
+            if isinstance(text, str):
+                hash_obj = hashlib.md5(text.encode('utf-8'))
+            else:
+                hash_obj = hashlib.md5(str(text).encode('utf-8'))
+            return f"embedding:{hash_obj.hexdigest()}"
+            
         async def _get_openai_embedding(self, text: str) -> List[float]:
             """Génère un embedding avec OpenAI."""
             self.call_count += 1
@@ -117,15 +164,7 @@ except ImportError:
                         model=self.model
                     )
                     embedding = result["data"][0]["embedding"]
-                
-                # Mettre en cache si disponible
-                if self.cache and embedding:
-                    try:
-                        self.cache.set_embedding(text, embedding)
-                    except Exception as e:
-                        self.logger.warning(f"Erreur lors de la mise en cache: {str(e)}")
-                        # Continuer même si la mise en cache échoue
-                        
+                                        
                 return embedding
                 
             except Exception as e:
