@@ -38,7 +38,18 @@ class ChatBot:
             raise ValueError("Les clés OpenAI et l'URL Qdrant sont requises")
             
         # Client OpenAI
-        self.openai_client = AsyncOpenAI(api_key=openai_key)
+        # Vérifier si c'est une clé de projet (commence par sk-proj-)
+        if openai_key.startswith("sk-proj-"):
+            # Initialisation pour clé de projet
+            self.openai_client = AsyncOpenAI(
+                api_key=openai_key,
+                organization=os.getenv("OPENAI_ORG_ID", None),  # Utiliser l'ID d'organisation si disponible
+                project=openai_key.split("-")[2] if len(openai_key.split("-")) > 2 else None
+            )
+        else:
+            # Initialisation standard
+            self.openai_client = AsyncOpenAI(api_key=openai_key)
+            
         self.openai_key = openai_key
         self.qdrant_url = qdrant_url
         self.qdrant_api_key = qdrant_api_key

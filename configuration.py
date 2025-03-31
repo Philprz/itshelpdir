@@ -9,6 +9,7 @@ import json
 import types
 import time
 import logging.handlers
+import hashlib
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -163,6 +164,19 @@ class GlobalCache:
         self._cleanup_task = None
         self._initialized = True  # Initialiser directement à True pour éviter les blocages
         
+    def __str__(self):
+        """Représentation en chaîne du cache."""
+        return f"GlobalCache(items={len(self._cache)}, memory={self._total_memory/1024/1024:.2f}MB)"
+        
+    def to_json(self):
+        """Retourne une représentation JSON-serializable du cache."""
+        return {
+            "items": len(self._cache),
+            "memory_mb": self._total_memory/1024/1024,
+            "max_memory_mb": self._max_memory/1024/1024,
+            "ttl": self._ttl
+        }
+        
     async def start_cleanup_task(self):
         """Démarre une tâche périodique de nettoyage du cache."""
         if self._cleanup_task is None:
@@ -288,8 +302,64 @@ class GlobalCache:
                 "ttl": self._ttl
             }
         except Exception as e:
-            logger.error(f"Erreur lors de la récupération du statut du cache: {str(e)}")
+            logger.error(f"Erreur lors de la récupération des statistiques du cache: {str(e)}")
             return {"error": str(e)}
+            
+    # Méthodes spécifiques pour la gestion des embeddings
+    def get_embedding(self, text):
+        """
+        Récupère un embedding stocké dans le cache.
+        
+        Args:
+            text: Le texte source pour lequel récupérer l'embedding
+            
+        Returns:
+            Liste de float représentant l'embedding ou None si non trouvé
+        """
+        try:
+            # Hash du texte pour l'utiliser comme clé
+            key = hashlib.md5(text.encode('utf-8')).hexdigest()
+            
+            # Accès direct pour éviter les problèmes d'async
+            full_key = f"embedding:{key}"
+            
+            if full_key in self._cache:
+                # Mise à jour du temps d'accès 
+                self._access_times[full_key] = time.monotonic()
+                return self._cache[full_key]
+            return None
+        except Exception as e:
+            logger.error(f"Erreur récupération embedding: {str(e)}")
+            return None
+        
+    def set_embedding(self, text, embedding):
+        """
+        Stocke un embedding dans le cache.
+        
+        Args:
+            text: Le texte source pour lequel stocker l'embedding
+            embedding: Liste de float représentant l'embedding
+        """
+        try:
+            # Hash du texte pour l'utiliser comme clé
+            key = hashlib.md5(text.encode('utf-8')).hexdigest()
+            
+            # Accès direct pour éviter les problèmes d'async
+            full_key = f"embedding:{key}"
+            
+            # Suppression de l'ancienne entrée si elle existe
+            if full_key in self._cache:
+                self._remove_item(full_key)
+                
+            # Stockage direct sans verrou asyncio
+            self._cache[full_key] = embedding
+            self._access_times[full_key] = time.monotonic()
+            self._size_tracker[full_key] = sys.getsizeof(embedding) if hasattr(sys, 'getsizeof') else len(embedding) * 8
+            
+            return True
+        except Exception as e:
+            logger.error(f"Erreur stockage embedding: {str(e)}")
+            return False
 
 # Initialisation du cache global
 global_cache = GlobalCache(

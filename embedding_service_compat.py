@@ -62,9 +62,13 @@ except ImportError:
             
             # Vérifier dans le cache si disponible
             if self.cache:
-                cached_embedding = self.cache.get_embedding(text)
-                if cached_embedding:
-                    return cached_embedding
+                try:
+                    cached_embedding = self.cache.get_embedding(text)
+                    if cached_embedding:
+                        return cached_embedding
+                except Exception as e:
+                    self.logger.warning(f"Erreur lors de l'accès au cache: {str(e)}")
+                    # Continuer même si le cache échoue
                     
             # Générer l'embedding avec le client configuré
             try:
@@ -116,8 +120,12 @@ except ImportError:
                 
                 # Mettre en cache si disponible
                 if self.cache and embedding:
-                    self.cache.set_embedding(text, embedding)
-                    
+                    try:
+                        self.cache.set_embedding(text, embedding)
+                    except Exception as e:
+                        self.logger.warning(f"Erreur lors de la mise en cache: {str(e)}")
+                        # Continuer même si la mise en cache échoue
+                        
                 return embedding
                 
             except Exception as e:
