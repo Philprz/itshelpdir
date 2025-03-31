@@ -15,7 +15,7 @@ try:
     from archive_scripts.search_clients import (
         GenericSearchClient, JiraSearchClient, ZendeskSearchClient, 
         ConfluenceSearchClient, NetsuiteSearchClient, 
-        NetsuiteDummiesSearchClient, SapSearchClient
+        NetsuiteDummiesSearchClient, SapSearchClient, ERPSearchClient
     )
     logger.info("Clients de recherche importés depuis archive_scripts")
 except ImportError as e:
@@ -130,7 +130,7 @@ def get_search_client(client_type: str, **kwargs) -> Optional[Any]:
         'netsuite': NetsuiteSearchClient,
         'netsuite_dummies': NetsuiteDummiesSearchClient,
         'sap': SapSearchClient,
-        'erp': GenericSearchClient  # Ajout du client ERP
+        'erp': ERPSearchClient  # Modification du client pour le type 'erp'
     }
     
     # Récupérer la classe cliente appropriée
