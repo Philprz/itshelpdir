@@ -143,11 +143,19 @@ class SearchClientFactory:
             async def get_by_id(self, id, *args, **kwargs):
                 self.logger.warning(f"Utilisation du client fallback pour {self.client_type}")
                 return None
+                
+            async def recherche_intelligente(self, question, client_name=None, date_debut=None, date_fin=None, limit=10):
+                self.logger.warning(f"Utilisation du client fallback pour {self.client_type}")
+                return []
+                
+            async def format_for_slack(self, result):
+                self.logger.warning(f"Utilisation du client fallback pour {self.client_type}")
+                return None
         
         return FallbackSearchClient(client_type)
     
-    def get_client(self, client_type: str) -> Any:
-        """Récupère un client de recherche par son type"""
+    async def get_client(self, client_type: str) -> Any:
+        """Récupère un client de recherche par son type de manière asynchrone"""
         if not self.initialized:
             self.logger.warning(f"Factory non initialisée, retourne un client fallback pour {client_type}")
             return self._create_fallback_client(client_type)
@@ -156,7 +164,67 @@ class SearchClientFactory:
             self.logger.warning(f"Client {client_type} non trouvé, retourne un client fallback")
             return self._create_fallback_client(client_type)
         
-        return self.clients.get(client_type)
+        client = self.clients.get(client_type)
+        
+        # Vérification que le client est async-compatible
+        if client and not hasattr(client, 'recherche_intelligente'):
+            self.logger.warning(f"Client {client_type} n'a pas de méthode recherche_intelligente async, utilisation d'un wrapper")
+            # Créer un wrapper asynchrone autour du client existant
+            return self._create_async_wrapper(client, client_type)
+            
+        return client
+        
+    def _create_async_wrapper(self, client, client_type):
+        """Crée un wrapper asynchrone autour d'un client synchrone"""
+        class AsyncClientWrapper:
+            def __init__(self, client, client_type):
+                self.client = client
+                self.client_type = client_type
+                self.logger = logging.getLogger(f"ITS_HELP.async_wrapper.{client_type}")
+                
+            async def recherche_intelligente(self, question, client_name=None, date_debut=None, date_fin=None, limit=10):
+                """Wrapper asynchrone pour recherche_intelligente"""
+                self.logger.info(f"Utilisation du wrapper async pour {self.client_type}")
+                try:
+                    # Convertir l'appel synchrone en asynchrone
+                    if hasattr(self.client, 'recherche_intelligente'):
+                        result = await asyncio.to_thread(
+                            self.client.recherche_intelligente,
+                            question,
+                            client_name,
+                            date_debut,
+                            date_fin,
+                            limit
+                        )
+                        return result
+                    # Fallback vers search si recherche_intelligente n'existe pas
+                    elif hasattr(self.client, 'search'):
+                        result = await asyncio.to_thread(
+                            self.client.search,
+                            question,
+                            limit=limit
+                        )
+                        return result
+                    else:
+                        self.logger.error(f"Client {self.client_type} n'a ni recherche_intelligente ni search")
+                        return []
+                except Exception as e:
+                    self.logger.error(f"Erreur dans le wrapper async pour {self.client_type}: {str(e)}")
+                    return []
+                    
+            async def format_for_slack(self, result):
+                """Wrapper asynchrone pour format_for_slack"""
+                try:
+                    if hasattr(self.client, 'format_for_slack'):
+                        # Si la méthode existe, la convertir en asynchrone
+                        formatted = await asyncio.to_thread(self.client.format_for_slack, result)
+                        return formatted
+                    return None
+                except Exception as e:
+                    self.logger.error(f"Erreur lors du formatage pour {self.client_type}: {str(e)}")
+                    return None
+        
+        return AsyncClientWrapper(client, client_type)
 
 
 # Instance globale pour l'application

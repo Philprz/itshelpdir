@@ -191,6 +191,49 @@ class ApplicationContext:
                 qdrant_url=qdrant_url,
                 qdrant_api_key=qdrant_api_key
             )
+            
+            # Vérification des connexions
+            self.logger.info("Vérification des connexions aux services externes...")
+            connection_status = await self.chatbot.verify_connections()
+            
+            # Journalisation détaillée des résultats
+            if connection_status["all_success"]:
+                self.logger.info("✅ Toutes les connexions sont fonctionnelles")
+                
+                # Log des latences pour le diagnostic de performance
+                openai_latency = connection_status["services"]["openai"].get("latency", 0)
+                qdrant_latency = connection_status["services"]["qdrant"].get("latency", 0)
+                self.logger.info(f"Latences: OpenAI {openai_latency:.2f}s, Qdrant {qdrant_latency:.2f}s")
+                
+                # Vérifier les avertissements sur les collections manquantes
+                missing_collections = connection_status["services"]["qdrant"].get("missing_collections", [])
+                if missing_collections:
+                    self.logger.warning(f"⚠️ Collections manquantes dans Qdrant: {', '.join(missing_collections)}")
+                    self.errors.append(f"Collections Qdrant manquantes: {', '.join(missing_collections)}")
+            else:
+                # Détail des services en échec
+                failed_services = []
+                error_details = []
+                
+                for service_name, status in connection_status["services"].items():
+                    if not status["success"]:
+                        failed_services.append(service_name)
+                        error_message = status.get("message", "Erreur inconnue")
+                        error_details.append(f"{service_name}: {error_message}")
+                
+                error_summary = f"❌ Échec de connexion aux services: {', '.join(failed_services)}"
+                self.logger.error(error_summary)
+                for detail in error_details:
+                    self.logger.error(f"  - {detail}")
+                
+                # Ajouter les erreurs au contexte de l'application
+                self.errors.append(error_summary)
+                for detail in error_details:
+                    self.errors.append(detail)
+                
+                # Retourner False pour indiquer un problème d'initialisation
+                return False
+            
             return True
         except Exception as e:
             self.logger.error(f"Erreur lors de l'initialisation du chatbot: {str(e)}")

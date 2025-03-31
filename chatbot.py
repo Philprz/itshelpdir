@@ -39,6 +39,9 @@ class ChatBot:
             
         # Client OpenAI
         self.openai_client = AsyncOpenAI(api_key=openai_key)
+        self.openai_key = openai_key
+        self.qdrant_url = qdrant_url
+        self.qdrant_api_key = qdrant_api_key
         
         # Initialisation des services avec imports locaux pour éviter les cycles
         from embedding_service_compat import EmbeddingService
@@ -68,6 +71,184 @@ class ChatBot:
         self._load_consultants()
         
         self.logger.info("ChatBot initialisé avec succès")
+        
+    async def verify_openai_connection(self) -> Dict[str, Any]:
+        """
+        Vérifie la connexion à l'API OpenAI et retourne le statut.
+        
+        Returns:
+            Dictionnaire contenant le statut de la connexion (success, message, etc.)
+        """
+        try:
+            # Tester avec un appel simple à l'API
+            start_time = time.monotonic()
+            self.logger.info("Vérification de la connexion OpenAI...")
+            
+            # Utiliser un modèle rapide et économique pour le test
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "Hello, this is a connection test."}],
+                max_tokens=5,
+                temperature=0
+            )
+            
+            latency = time.monotonic() - start_time
+            
+            # Vérifier si la réponse contient du contenu valide
+            if response and response.choices and len(response.choices) > 0:
+                self.logger.info(f"✅ Connexion OpenAI réussie (latence: {latency:.2f}s)")
+                return {
+                    "success": True,
+                    "latency": latency,
+                    "model": "gpt-4o-mini",
+                    "message": "Connexion OpenAI établie avec succès"
+                }
+            else:
+                self.logger.error("Réponse OpenAI vide ou invalide")
+                return {
+                    "success": False,
+                    "message": "Réponse OpenAI vide ou invalide"
+                }
+                
+        except OpenAIError as e:
+            self.logger.error(f"❌ Erreur de connexion OpenAI: {str(e)}")
+            # Analyse d'erreurs communes
+            error_message = str(e)
+            if "API key" in error_message and ("invalid" in error_message.lower() or "incorrect" in error_message.lower()):
+                return {
+                    "success": False,
+                    "message": f"Clé API OpenAI invalide ou incorrecte: {error_message}",
+                    "error_type": "invalid_api_key",
+                    "error": str(e)
+                }
+            elif "rate limit" in error_message.lower():
+                return {
+                    "success": False,
+                    "message": f"Limite de taux OpenAI atteinte: {error_message}",
+                    "error_type": "rate_limit",
+                    "error": str(e)
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"Erreur de connexion OpenAI: {error_message}",
+                    "error": str(e)
+                }
+                
+        except Exception as e:
+            self.logger.error(f"❌ Exception inattendue lors de la vérification OpenAI: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Exception inattendue: {str(e)}",
+                "error": str(e)
+            }
+            
+    async def verify_qdrant_connection(self) -> Dict[str, Any]:
+        """
+        Vérifie la connexion à Qdrant et retourne le statut.
+        
+        Returns:
+            Dictionnaire contenant le statut de la connexion (success, message, etc.)
+        """
+        try:
+            from qdrant_client import QdrantClient
+            from qdrant_client.http.exceptions import UnexpectedResponse
+            
+            start_time = time.monotonic()
+            self.logger.info(f"Vérification de la connexion Qdrant ({self.qdrant_url})...")
+            
+            # Créer un client Qdrant temporaire pour le test
+            client = QdrantClient(
+                url=self.qdrant_url,
+                api_key=self.qdrant_api_key,
+                timeout=5.0  # Timeout court pour ne pas bloquer trop longtemps
+            )
+            
+            # Tenter une opération simple comme lister les collections
+            collections = await asyncio.to_thread(client.get_collections)
+            
+            latency = time.monotonic() - start_time
+            
+            collection_count = len(collections.collections) if hasattr(collections, 'collections') else 0
+            collection_names = [coll.name for coll in collections.collections] if hasattr(collections, 'collections') else []
+            
+            # Vérifier que nos collections existent
+            missing_collections = []
+            for coll_name in self.collections.values():
+                if coll_name and coll_name not in collection_names:
+                    missing_collections.append(coll_name)
+            
+            # Succès si au moins une collection est trouvée
+            if collection_count > 0:
+                status_message = f"✅ Connexion Qdrant réussie ({collection_count} collections, latence: {latency:.2f}s)"
+                if missing_collections:
+                    status_message += f" - ATTENTION: {len(missing_collections)} collections manquantes: {', '.join(missing_collections)}"
+                    self.logger.warning(status_message)
+                else:
+                    self.logger.info(status_message)
+                
+                return {
+                    "success": True,
+                    "latency": latency,
+                    "collection_count": collection_count,
+                    "collections": collection_names,
+                    "missing_collections": missing_collections,
+                    "message": "Connexion Qdrant établie avec succès"
+                }
+            else:
+                self.logger.error("Aucune collection trouvée dans Qdrant")
+                return {
+                    "success": False,
+                    "message": "Aucune collection trouvée dans Qdrant"
+                }
+                
+        except UnexpectedResponse as e:
+            self.logger.error(f"❌ Erreur de réponse Qdrant: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Erreur de réponse Qdrant: {str(e)}",
+                "error": str(e)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ Exception inattendue lors de la vérification Qdrant: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Exception inattendue: {str(e)}",
+                "error": str(e)
+            }
+            
+    async def verify_connections(self) -> Dict[str, Any]:
+        """
+        Vérifie toutes les connexions nécessaires au fonctionnement du chatbot.
+        
+        Returns:
+            Dictionnaire contenant le statut des différentes connexions
+        """
+        results = {
+            "all_success": True,
+            "timestamp": datetime.now().isoformat(),
+            "services": {}
+        }
+        
+        # Vérifier OpenAI
+        openai_status = await self.verify_openai_connection()
+        results["services"]["openai"] = openai_status
+        results["all_success"] = results["all_success"] and openai_status["success"]
+        
+        # Vérifier Qdrant
+        qdrant_status = await self.verify_qdrant_connection()
+        results["services"]["qdrant"] = qdrant_status
+        results["all_success"] = results["all_success"] and qdrant_status["success"]
+        
+        # Résumé des résultats
+        if results["all_success"]:
+            self.logger.info("✅ Toutes les connexions sont fonctionnelles")
+        else:
+            failed_services = [name for name, status in results["services"].items() if not status["success"]]
+            self.logger.error(f"❌ Échec de connexion pour les services: {', '.join(failed_services)}")
+        
+        return results
     
     def _load_consultants(self):
         """Charge la liste des consultants depuis un fichier."""
@@ -343,19 +524,17 @@ class ChatBot:
             source_type = collection.lower()
             self.logger.info(f"Demande du client pour source_type={source_type} (collection={collection})")
             
-            client = await search_factory.get_client(source_type)
-            if client and not isinstance(client, Exception):
-                try:
-                    # Test simple pour vérifier si c'est un client valide
+            try:
+                client = await self.search_factory.get_client(source_type)
+                if client:
+                    # Vérifier que le client est bien un objet valide avec recherche_intelligente
                     if hasattr(client, 'recherche_intelligente'):
                         clients[source_type] = client
                         self.logger.info(f"Client récupéré pour {source_type}: {type(client).__name__}")
                     else:
                         self.logger.warning(f"Client sans méthode recherche_intelligente pour {source_type}: {type(client).__name__}")
-                except Exception as e:
-                    self.logger.error(f"Erreur lors de la vérification client pour {source_type}: {str(e)}")
-            else:
-                self.logger.error(f"Client non disponible pour source_type {source_type}")
+            except Exception as e:
+                self.logger.error(f"Erreur lors de la récupération du client pour {source_type}: {str(e)}")
             
         if not clients:
             self.logger.error("Aucun client de recherche disponible pour cette requête.")
