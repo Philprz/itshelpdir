@@ -1,6 +1,6 @@
 from typing import Dict, Optional, Any
 from datetime import datetime
-from search_base import AbstractSearchClient, DefaultResultProcessor
+from .search_base import AbstractSearchClient, DefaultResultProcessor
 from configuration import logger
 
 

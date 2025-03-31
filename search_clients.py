@@ -129,7 +129,8 @@ def get_search_client(client_type: str, **kwargs) -> Optional[Any]:
         'confluence': ConfluenceSearchClient,
         'netsuite': NetsuiteSearchClient,
         'netsuite_dummies': NetsuiteDummiesSearchClient,
-        'sap': SapSearchClient
+        'sap': SapSearchClient,
+        'erp': GenericSearchClient  # Ajout du client ERP
     }
     
     # Récupérer la classe cliente appropriée
