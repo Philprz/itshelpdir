@@ -64,7 +64,7 @@ def initialize_if_needed():
             # Exécution synchrone de l'initialisation dans le context de la requête
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(main_app.initialize_app())
+            loop.run_until_complete(main_app.initialize())
             loop.close()
             initialized = True
             logger.info("Initialisation terminée !")
