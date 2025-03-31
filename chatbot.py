@@ -82,7 +82,7 @@ class ChatBot:
         try:
             # Tester avec un appel simple à l'API
             start_time = time.monotonic()
-            self.logger.info("Vérification de la connexion OpenAI...")
+            self.logger.info("🔍 TEST DE CONNEXION OPENAI: Vérification de la connexion à l'API OpenAI...")
             
             # Utiliser un modèle rapide et économique pour le test
             response = await self.openai_client.chat.completions.create(
@@ -96,7 +96,7 @@ class ChatBot:
             
             # Vérifier si la réponse contient du contenu valide
             if response and response.choices and len(response.choices) > 0:
-                self.logger.info(f"✅ Connexion OpenAI réussie (latence: {latency:.2f}s)")
+                self.logger.info(f"✅ TEST DE CONNEXION OPENAI: Succès - API clé valide et opérationnelle (latence: {latency:.2f}s)")
                 return {
                     "success": True,
                     "latency": latency,
@@ -104,14 +104,14 @@ class ChatBot:
                     "message": "Connexion OpenAI établie avec succès"
                 }
             else:
-                self.logger.error("Réponse OpenAI vide ou invalide")
+                self.logger.error("❌ TEST DE CONNEXION OPENAI: Échec - Réponse OpenAI vide ou invalide")
                 return {
                     "success": False,
                     "message": "Réponse OpenAI vide ou invalide"
                 }
                 
         except OpenAIError as e:
-            self.logger.error(f"❌ Erreur de connexion OpenAI: {str(e)}")
+            self.logger.error(f"❌ TEST DE CONNEXION OPENAI: Échec - Erreur API: {str(e)}")
             # Analyse d'erreurs communes
             error_message = str(e)
             if "API key" in error_message and ("invalid" in error_message.lower() or "incorrect" in error_message.lower()):
@@ -136,7 +136,7 @@ class ChatBot:
                 }
                 
         except Exception as e:
-            self.logger.error(f"❌ Exception inattendue lors de la vérification OpenAI: {str(e)}")
+            self.logger.error(f"❌ TEST DE CONNEXION OPENAI: Échec - Exception inattendue: {str(e)}")
             return {
                 "success": False,
                 "message": f"Exception inattendue: {str(e)}",
@@ -155,13 +155,13 @@ class ChatBot:
             from qdrant_client.http.exceptions import UnexpectedResponse
             
             start_time = time.monotonic()
-            self.logger.info(f"Vérification de la connexion Qdrant ({self.qdrant_url})...")
+            self.logger.info(f"🔍 TEST DE CONNEXION QDRANT: Vérification de la connexion au serveur ({self.qdrant_url})...")
             
             # Créer un client Qdrant temporaire pour le test
             client = QdrantClient(
                 url=self.qdrant_url,
                 api_key=self.qdrant_api_key,
-                timeout=5.0  # Timeout court pour ne pas bloquer trop longtemps
+                timeout=10.0  # Timeout plus long pour être plus tolérant aux latences réseau
             )
             
             # Tenter une opération simple comme lister les collections
@@ -180,7 +180,7 @@ class ChatBot:
             
             # Succès si au moins une collection est trouvée
             if collection_count > 0:
-                status_message = f"✅ Connexion Qdrant réussie ({collection_count} collections, latence: {latency:.2f}s)"
+                status_message = f"✅ TEST DE CONNEXION QDRANT: Succès - Serveur accessible avec {collection_count} collections (latence: {latency:.2f}s)"
                 if missing_collections:
                     status_message += f" - ATTENTION: {len(missing_collections)} collections manquantes: {', '.join(missing_collections)}"
                     self.logger.warning(status_message)
@@ -196,14 +196,14 @@ class ChatBot:
                     "message": "Connexion Qdrant établie avec succès"
                 }
             else:
-                self.logger.error("Aucune collection trouvée dans Qdrant")
+                self.logger.error("❌ TEST DE CONNEXION QDRANT: Échec - Aucune collection trouvée dans le serveur")
                 return {
                     "success": False,
-                    "message": "Aucune collection trouvée dans Qdrant"
+                    "message": "Aucune collection trouvée dans le serveur"
                 }
                 
         except UnexpectedResponse as e:
-            self.logger.error(f"❌ Erreur de réponse Qdrant: {str(e)}")
+            self.logger.error(f"❌ TEST DE CONNEXION QDRANT: Échec - Erreur de réponse: {str(e)}")
             return {
                 "success": False,
                 "message": f"Erreur de réponse Qdrant: {str(e)}",
@@ -211,7 +211,7 @@ class ChatBot:
             }
             
         except Exception as e:
-            self.logger.error(f"❌ Exception inattendue lors de la vérification Qdrant: {str(e)}")
+            self.logger.error(f"❌ TEST DE CONNEXION QDRANT: Échec - Exception inattendue: {str(e)}")
             return {
                 "success": False,
                 "message": f"Exception inattendue: {str(e)}",
@@ -225,6 +225,8 @@ class ChatBot:
         Returns:
             Dictionnaire contenant le statut des différentes connexions
         """
+        self.logger.info("🔍 VÉRIFICATION DES CONNEXIONS: Démarrage des tests de connexion pour tous les services externes...")
+        
         results = {
             "all_success": True,
             "timestamp": datetime.now().isoformat(),
@@ -243,10 +245,12 @@ class ChatBot:
         
         # Résumé des résultats
         if results["all_success"]:
-            self.logger.info("✅ Toutes les connexions sont fonctionnelles")
+            self.logger.info("✅ VÉRIFICATION DES CONNEXIONS TERMINÉE: Tous les services externes ont été testés et sont fonctionnels")
+            self.logger.info(f"   - OpenAI: Connecté (latence: {openai_status.get('latency', 0):.2f}s)")
+            self.logger.info(f"   - Qdrant: Connecté (latence: {qdrant_status.get('latency', 0):.2f}s)")
         else:
             failed_services = [name for name, status in results["services"].items() if not status["success"]]
-            self.logger.error(f"❌ Échec de connexion pour les services: {', '.join(failed_services)}")
+            self.logger.error(f"❌ VÉRIFICATION DES CONNEXIONS TERMINÉE: Échec de connexion pour {len(failed_services)} service(s): {', '.join(failed_services)}")
         
         return results
     

@@ -84,7 +84,7 @@ class QdrantAdapter(VectorStoreAdapter):
             self._client = QdrantClient(
                 url=self.qdrant_url,
                 api_key=self.qdrant_api_key,
-                timeout=self.connection_timeout
+                timeout=self.connection_timeout  # Utiliser le timeout configuré
             )
             
             # Tester la connexion

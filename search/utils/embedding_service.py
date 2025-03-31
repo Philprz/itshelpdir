@@ -102,14 +102,25 @@ class EmbeddingService:
         self.call_count += 1
         
         try:
-            # Appel à l'API OpenAI
-            result = self.openai_client.embeddings.create(
-                model=self.model,
-                input=text
-            )
-            
-            # Extraire l'embedding
-            embedding = result.data[0].embedding
+            # Appel à l'API OpenAI (version récente avec await)
+            if hasattr(self.openai_client, 'embeddings'):
+                result = await self.openai_client.embeddings.create(
+                    model=self.model,
+                    input=text
+                )
+                
+                # Extraire l'embedding
+                embedding = result.data[0].embedding
+            else:
+                # Support de l'ancienne API OpenAI
+                self.logger.error("API OpenAI (ancienne): 'AsyncOpenAI' object has no attribute 'embedding'")
+                result = await self.openai_client.embedding(
+                    input=text,
+                    model=self.model
+                )
+                
+                # Extraire l'embedding
+                embedding = result["data"][0]["embedding"]
             
             # Mettre en cache si disponible
             if self.cache:
@@ -117,30 +128,12 @@ class EmbeddingService:
                 
             return embedding
             
-        except AttributeError:
-            # Support de l'ancienne API OpenAI
-            try:
-                result = self.openai_client.embedding(
-                    input=text,
-                    model=self.model
-                )
-                
-                # Extraire l'embedding
-                embedding = result["data"][0]["embedding"]
-                
-                # Mettre en cache si disponible
-                if self.cache:
-                    self.cache.set_embedding(text, embedding)
-                    
-                return embedding
-                
-            except Exception as e:
-                self.logger.error(f"Erreur API OpenAI (ancienne): {str(e)}")
-                raise
-                
+        except AttributeError as e:
+            self.logger.error(f"Erreur API OpenAI (ancienne): {str(e)}")
+            raise e
         except Exception as e:
-            self.logger.error(f"Erreur API OpenAI: {str(e)}")
-            raise
+            self.logger.error(f"Erreur lors de la génération d'embedding: {str(e)}")
+            raise e
             
     def get_stats(self):
         """

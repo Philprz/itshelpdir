@@ -95,13 +95,23 @@ class QdrantSearchClientFactory:
         try:
             if is_local:
                 # Client local
-                return QdrantClient(url=self.qdrant_url)
+                return QdrantClient(
+                    url=self.qdrant_url,
+                    timeout=10.0  # Timeout augmenté pour meilleure fiabilité
+                )
             else:
                 # Client distant avec authentification si nécessaire
                 if self.qdrant_api_key:
-                    return QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
+                    return QdrantClient(
+                        url=self.qdrant_url, 
+                        api_key=self.qdrant_api_key,
+                        timeout=10.0  # Timeout augmenté pour meilleure fiabilité
+                    )
                 else:
-                    return QdrantClient(url=self.qdrant_url)
+                    return QdrantClient(
+                        url=self.qdrant_url,
+                        timeout=10.0  # Timeout augmenté pour meilleure fiabilité
+                    )
         except Exception as e:
             self.logger.error(f"Erreur création client Qdrant: {str(e)}")
             return None

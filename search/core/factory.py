@@ -241,7 +241,11 @@ class SearchClientFactory:
                     raise ValueError("QDRANT_URL n'est pas défini dans les variables d'environnement")
                     
                 self.logger.info(f"Connexion à Qdrant: {qdrant_url}")
-                client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+                client = QdrantClient(
+                    url=qdrant_url, 
+                    api_key=qdrant_api_key,
+                    timeout=10.0  # Augmentation du timeout pour une meilleure tolérance aux latences réseau
+                )
                 
                 # Vérifier que le client fonctionne
                 collections = client.get_collections()

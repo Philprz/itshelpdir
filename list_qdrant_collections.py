@@ -31,7 +31,8 @@ def list_collections():
         
         client = QdrantClient(
             url=qdrant_url,
-            api_key=qdrant_api_key
+            api_key=qdrant_api_key,
+            timeout=10.0  # Timeout augmenté pour une meilleure fiabilité
         )
         
         # Récupération des collections
