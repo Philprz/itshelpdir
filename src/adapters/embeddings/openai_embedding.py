@@ -9,6 +9,7 @@ import logging
 import asyncio
 import time
 import numpy as np
+import json
 from typing import Dict, List, Any, Optional, Union, Callable, Tuple
 
 # Import des interfaces nécessaires
@@ -19,6 +20,19 @@ from ...infrastructure.cache import get_cache_instance
 
 # Configuration du logging
 logger = logging.getLogger("ITS_HELP.adapters.embeddings.openai")
+
+# Classe pour la sérialisation JSON personnalisée
+class CacheJSONEncoder(json.JSONEncoder):
+    """Encodeur JSON personnalisé pour gérer les objets non-sérialisables"""
+    def default(self, obj):
+        # Si l'objet possède une méthode to_dict(), l'utiliser
+        if hasattr(obj, 'to_dict'):
+            return obj.to_dict()
+        # Pour les objets de type cache ou autres non sérialisables
+        if hasattr(obj, '__class__'):
+            return f"<{obj.__class__.__name__} object>"
+        # Fallback pour les autres types
+        return str(obj)
 
 class OpenAIEmbeddingService(EmbeddingService):
     """
@@ -279,6 +293,13 @@ class OpenAIEmbeddingService(EmbeddingService):
             
         except Exception as e:
             logger.error(f"Erreur lors de la génération d'embedding: {str(e)}")
+            # Utiliser notre encodeur personnalisé pour le logging
+            if hasattr(e, '__dict__'):
+                try:
+                    error_details = json.dumps(e.__dict__, cls=CacheJSONEncoder, ensure_ascii=False)
+                    logger.debug(f"Détails de l'erreur: {error_details}")
+                except Exception as json_err:
+                    logger.debug(f"Impossible de sérialiser les détails de l'erreur: {str(json_err)}")
             raise
     
     async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -359,6 +380,13 @@ class OpenAIEmbeddingService(EmbeddingService):
                     
                 except Exception as e:
                     logger.error(f"Erreur lors de la génération d'embeddings en batch: {str(e)}")
+                    # Utiliser notre encodeur personnalisé pour le logging
+                    if hasattr(e, '__dict__'):
+                        try:
+                            error_details = json.dumps(e.__dict__, cls=CacheJSONEncoder, ensure_ascii=False)
+                            logger.debug(f"Détails de l'erreur: {error_details}")
+                        except Exception as json_err:
+                            logger.debug(f"Impossible de sérialiser les détails de l'erreur: {str(json_err)}")
                     raise
             
             # Ajouter les résultats du batch
