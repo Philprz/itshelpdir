@@ -219,7 +219,14 @@ class SafeCacheProxy:
             # Tenter d'utiliser la méthode get() asynchrone
             if hasattr(self._cache, 'get') and callable(self._cache.get):
                 try:
-                    return await self._cache.get(key, namespace="embeddings")
+                    result = await self._cache.get(key, namespace="embeddings")
+                    # Vérifier que la valeur est sérialisable
+                    try:
+                        json.dumps(result)
+                    except Exception as ex:
+                        self._logger.warning(f"Valeur non sérialisable récupérée du cache: {ex.__class__.__name__}")
+                        return None
+                    return result
                 except Exception as e:
                     self._logger.debug(f"Erreur lors de l'accès au cache async: {e.__class__.__name__}")
             
@@ -228,7 +235,6 @@ class SafeCacheProxy:
                 # Cette méthode pourrait utiliser le texte original comme clé
                 # Nous ne pouvons pas le récupérer depuis notre hash
                 return None
-                
             return None
         except Exception as e:
             self._logger.warning(f"Erreur proxifiée lors de la récupération depuis le cache: {e.__class__.__name__}")
