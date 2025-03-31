@@ -320,6 +320,13 @@ def handle_message(data):
     mode = data.get('mode', 'detail')
     logger.info("handle_message déclenché, user_id: %s, message: %s, mode: %s", user_id, message, mode)
     print("SOCKET.IO MESSAGE REÇU:", data)  # Ajout d'un log plus visible
+    
+    # Envoyer immédiatement un accusé de réception
+    emit('response', {
+        'message': f'J\'ai bien reçu votre question "{message}". Recherche en cours...',
+        'type': 'ack',
+        'status': 'processing'
+    })
 
     if 'action' in data:
         action = data.get('action', {})
@@ -327,9 +334,7 @@ def handle_message(data):
         action_value = action.get('value', '')
         logger.info("Action reçue: %s, value: %s", action_type, action_value)
     
-    message = data.get('message', '')
-    logger.info("handle_message déclenché, user_id: %s, message: %s", user_id, message)
-    print("handle_message déclenché, data reçues:", data)
+    logger.info("handle_message déclenché, data reçues:", data)
     
     # Utilisation du chatbot depuis le contexte d'application
     if not app_context.chatbot:
@@ -354,11 +359,13 @@ def handle_message(data):
             message=message, 
             mode=mode
         )
-        # Envoi d'un accusé de réception
-        emit('response', {'message': 'Message reçu, traitement en cours...', 'type': 'status'})
     except Exception as e:
         logger.error(f"Erreur lors du démarrage du traitement: {str(e)}")
-        emit('response', {'message': 'Erreur lors du traitement: ' + str(e), 'type': 'error'})
+        emit('response', {
+            'message': f'Erreur lors du traitement: {str(e)}', 
+            'type': 'error',
+            'status': 'failed'
+        })
 
 def run_process_message(user_id, message, mode="detail"):
     """

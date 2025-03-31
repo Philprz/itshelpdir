@@ -6,6 +6,7 @@ archivées des clients de recherche et l'application principale.
 """
 
 import logging
+import asyncio
 from typing import Any, Optional
 
 logger = logging.getLogger('ITS_HELP.search_clients')
@@ -82,6 +83,79 @@ except ImportError as e:
         """Client pour les tickets Jira."""
         def get_source_name(self):
             return "JIRA"
+            
+        async def recherche_intelligente(self, question, client_name=None, date_debut=None, date_fin=None, limit=10):
+            """
+            Méthode asynchrone pour effectuer une recherche intelligente dans JIRA.
+            
+            Args:
+                question: Question ou texte de recherche
+                client_name: Nom du client (optionnel)
+                date_debut: Date de début pour filtrage (optionnel)
+                date_fin: Date de fin pour filtrage (optionnel)
+                limit: Nombre maximum de résultats à retourner
+                
+            Returns:
+                Liste des résultats de recherche
+            """
+            try:
+                # Utiliser la méthode héritée mais convertir le résultat en asynchrone
+                return await asyncio.to_thread(
+                    super().recherche_intelligente, 
+                    question, 
+                    client_name, 
+                    date_debut, 
+                    date_fin, 
+                    limit
+                )
+            except Exception as e:
+                logger.error(f"Erreur lors de la recherche JIRA: {str(e)}")
+                return []
+                
+        async def format_for_slack(self, result):
+            """Format le résultat pour affichage dans Slack."""
+            try:
+                # Si result a un attribut payload, l'utiliser directement
+                if hasattr(result, 'payload'):
+                    payload = result.payload
+                # Sinon, considérer que result est lui-même le payload
+                else:
+                    payload = result
+                
+                # Extraire les informations pertinentes
+                title = payload.get('summary', '')
+                key = payload.get('key', 'N/A')
+                status = payload.get('status', 'En cours')
+                client = payload.get('client', 'N/A')
+                assignee = payload.get('assignee', 'Non assigné')
+                created = payload.get('created', 'N/A')
+                updated = payload.get('updated', 'N/A')
+                description = payload.get('description', '')
+                url = payload.get('url', '')
+                
+                # Limiter la longueur de la description
+                if description and len(description) > 500:
+                    description = description[:497] + "..."
+                
+                # Construire le bloc formaté
+                return {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*JIRA* - {key}\n"
+                            f"*Client:* {client}\n"
+                            f"*Titre:* {title}\n"
+                            f"*Status:* {status} - *Assigné à:* {assignee}\n"
+                            f"*Créé le:* {created} - *Maj:* {updated}\n"
+                            f"*Description:* {description}\n"
+                            f"*URL:* {url}"
+                        )
+                    }
+                }
+            except Exception as e:
+                logger.error(f"Erreur lors du formatage JIRA: {str(e)}")
+                return None
             
     class ZendeskSearchClient(GenericSearchClient):
         """Client pour les tickets Zendesk."""

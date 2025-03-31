@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
 # Importations qui seront utilisées à l'initialisation seulement
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAIError
 from gestion_clients import extract_client_name
 
 # Importation de la factory (pas de dépendance circulaire ici)
@@ -1256,20 +1256,47 @@ class ChatBot:
                 return await self._process_command(text[1:], conversation, user_id)
 
             # Vérification si salutation
-            if await self.is_greeting(text):
+            try:
+                is_greeting = await self.is_greeting(text)
+                if is_greeting:
+                    return {
+                        "text": "Bonjour, comment puis-je vous aider ?",
+                        "blocks": [{
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": "Bonjour, comment puis-je vous aider ?"}
+                        }]
+                    }
+            except OpenAIError as e:
+                self.logger.error(f"Erreur API OpenAI lors de la détection de salutation: {str(e)}")
                 return {
-                    "text": "Bonjour, comment puis-je vous aider ?",
+                    "text": "Une erreur est survenue avec l'API OpenAI. Veuillez vérifier votre clé API.",
                     "blocks": [{
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": "Bonjour, comment puis-je vous aider ?"}
+                        "text": {"type": "mrkdwn", "text": "❌ **Erreur API OpenAI**: Veuillez vérifier que votre clé API est correcte et active."}
                     }]
                 }
+            except Exception as e:
+                self.logger.error(f"Erreur détection salutation: {str(e)}")
+                # Continuer malgré l'erreur de détection de salutation
 
             # Timeout global pour limiter le temps de traitement
             try:
                 async with asyncio.timeout(timeout):  # Utilisation du timeout spécifié
                     # Analyse de la question pour déterminer le contexte et la stratégie
-                    analysis = await asyncio.wait_for(self.analyze_question(text), timeout=60)  # Augmenté à 60 secondes
+                    try:
+                        analysis = await asyncio.wait_for(self.analyze_question(text), timeout=60)  # Augmenté à 60 secondes
+                    except OpenAIError as e:
+                        self.logger.error(f"Erreur API OpenAI lors de l'analyse: {str(e)}")
+                        return {
+                            "text": "Une erreur est survenue avec l'API OpenAI. Veuillez vérifier votre clé API.",
+                            "blocks": [{
+                                "type": "section",
+                                "text": {"type": "mrkdwn", "text": "❌ **Erreur API OpenAI**: Veuillez vérifier que votre clé API est correcte et active."}
+                            }]
+                        }
+                    except Exception as e:
+                        self.logger.error(f"Erreur analyse question: {str(e)}")
+                        analysis = self._fallback_analysis(text)
 
                     if not analysis or not isinstance(analysis, dict):
                         return {
@@ -1335,14 +1362,24 @@ class ChatBot:
                     collections = self.determine_collections(analysis)
                     self.logger.info(f"Collections sélectionnées: {collections}")
 
-                    # Exécution des recherches coordonnées
-                    resultats = await self.recherche_coordonnee(
-                        collections=collections,
-                        question=text,
-                        client_info=client_info,
-                        date_debut=date_debut,
-                        date_fin=date_fin
-                    )
+                    try:
+                        # Exécution des recherches coordonnées
+                        resultats = await self.recherche_coordonnee(
+                            collections=collections,
+                            question=text,
+                            client_info=client_info,
+                            date_debut=date_debut,
+                            date_fin=date_fin
+                        )
+                    except Exception as e:
+                        self.logger.error(f"Erreur recherche_coordonnee: {str(e)}")
+                        return {
+                            "text": f"Une erreur est survenue lors de la recherche: {str(e)}",
+                            "blocks": [{
+                                "type": "section",
+                                "text": {"type": "mrkdwn", "text": f"❌ **Erreur de recherche**: {str(e)}\n\nVeuillez réessayer ou contacter l'administrateur si le problème persiste."}
+                            }]
+                        }
 
                     if not resultats:
                         return {
@@ -1394,14 +1431,32 @@ class ChatBot:
             elapsed_time = time.monotonic() - start_time
             self.logger.error(f"Échec après {elapsed_time:.2f}s")
 
-            return {
-                "text": f"Une erreur est survenue pendant le traitement: {str(e)}",
-                "blocks": [{
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"Une erreur est survenue pendant le traitement: {str(e)}"}
-                }]
-            }
-
+            # Détection des erreurs spécifiques
+            error_message = str(e)
+            if "can't be used in 'await' expression" in error_message:
+                return {
+                    "text": "Une erreur technique est survenue. Un client de recherche n'est pas correctement configuré pour les appels asynchrones.",
+                    "blocks": [{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": "⚠️ **Erreur technique**: Un client de recherche n'est pas correctement configuré pour les appels asynchrones. L'équipe technique a été informée et travaille à résoudre ce problème."}
+                    }]
+                }
+            elif "OpenAI" in error_message and "API key" in error_message:
+                return {
+                    "text": "Erreur d'authentification API OpenAI. Veuillez vérifier votre clé API.",
+                    "blocks": [{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": "❌ **Erreur d'authentification OpenAI**: Votre clé API semble être incorrecte ou expirée. Veuillez vérifier les paramètres de configuration."}
+                    }]
+                }
+            else:
+                return {
+                    "text": f"Une erreur est survenue pendant le traitement: {str(e)}",
+                    "blocks": [{
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"❌ **Erreur de traitement**: {str(e)}\n\nVeuillez réessayer ou contacter l'administrateur si le problème persiste."}
+                    }]
+                }
             
    
     async def handle_action_button(self, action_type: str, action_value: str, conversation: Any, user_id: str,
