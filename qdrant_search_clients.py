@@ -135,7 +135,8 @@ class QdrantSearchClientFactory:
             try:
                 from search_clients import (
                     JiraSearchClient, ZendeskSearchClient, ConfluenceSearchClient,
-                    NetsuiteSearchClient, NetsuiteDummiesSearchClient, SapSearchClient
+                    NetsuiteSearchClient, NetsuiteDummiesSearchClient, SapSearchClient,
+                    ERPSearchClient
                 )
                 
                 # Créer le client approprié
@@ -166,6 +167,11 @@ class QdrantSearchClientFactory:
                     )
                 elif client_type.lower() == 'sap':
                     return SapSearchClient(
+                        collection_name, self.qdrant_client,
+                        self.embedding_service, self.translation_service
+                    )
+                elif client_type.lower() == 'erp':
+                    return ERPSearchClient(
                         collection_name, self.qdrant_client,
                         self.embedding_service, self.translation_service
                     )
