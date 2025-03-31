@@ -6,7 +6,19 @@ existantes d'embedding_service et l'application principale.
 """
 
 import logging
-from typing import List
+from typing import List, Dict, Any
+
+# Import conditionnel du décorateur safe_cache_operation
+try:
+    from src.infrastructure.cache_decorators import safe_cache_operation
+    HAVE_SAFE_DECORATOR = True
+except ImportError:
+    HAVE_SAFE_DECORATOR = False
+    # Définir un décorateur de remplacement qui ne fait rien
+    def safe_cache_operation(fallback_value=None):
+        def decorator(func):
+            return func
+        return decorator
 
 # Import du service original s'il existe
 try:
@@ -43,6 +55,17 @@ except ImportError:
             self.call_count = 0
             self.error_count = 0
             
+            # Journaliser l'initialisation de manière sécurisée
+            if self.cache:
+                if hasattr(self.cache, 'to_dict'):
+                    cache_info = self.cache.to_dict()
+                    self.logger.info(f"EmbeddingService initialisé avec cache: {cache_info.get('type', 'Unknown')}")
+                else:
+                    self.logger.info(f"EmbeddingService initialisé avec cache: {type(self.cache).__name__}")
+            else:
+                self.logger.info("EmbeddingService initialisé sans cache")
+            
+        @safe_cache_operation(fallback_value=[0.0] * 1536)
         async def get_embedding(self, text: str) -> List[float]:
             """
             Génère l'embedding d'un texte.
@@ -79,6 +102,7 @@ except ImportError:
                     if embedding:
                         return embedding
                 except Exception as e:
+                    # Éviter de sérialiser l'objet cache dans les logs
                     self.logger.warning(f"Erreur lors de l'accès au cache: {str(e)}")
                     # Continuer même si le cache échoue
                     
@@ -99,6 +123,7 @@ except ImportError:
                                 if hasattr(self.cache, "set_embedding"):
                                     self.cache.set_embedding(text, embedding)
                         except Exception as e:
+                            # Éviter de sérialiser l'objet cache dans les logs
                             self.logger.warning(f"Erreur lors de la mise en cache: {str(e)}")
                             
                     return embedding
@@ -171,7 +196,7 @@ except ImportError:
                 self.logger.error(f"Erreur API OpenAI: {str(e)}")
                 raise
                 
-        def get_stats(self):
+        def get_stats(self) -> Dict[str, Any]:
             """Retourne des statistiques sur l'utilisation du service."""
             return {
                 "calls": self.call_count,

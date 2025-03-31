@@ -7,9 +7,8 @@ pour maintenir la compatibilité avec le système existant.
 
 import asyncio
 import logging
-import time
-from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 import os
+from typing import Any, Dict, List, Optional
 
 # Import du nouveau système de cache
 from .cache import get_cache_instance, IntelligentCache
@@ -40,7 +39,71 @@ class GlobalCache:
         # Sera initialisé lors du premier appel à _get_cache()
         self._intelligent_cache = None
         
-        logger.info(f"Adaptateur GlobalCache initialisé avec compatibilité vers IntelligentCache")
+        logger.info("Adaptateur GlobalCache initialisé avec compatibilité vers IntelligentCache")
+    
+    def __str__(self) -> str:
+        """
+        Retourne une représentation chaîne de l'objet GlobalCache.
+        Cette méthode évite les problèmes de sérialisation lors du logging.
+        
+        Returns:
+            Représentation chaîne de l'objet GlobalCache
+        """
+        return f"GlobalCache(max_size={self._max_size}, ttl={self._ttl}, initialized={self._initialized})"
+        
+    def __repr__(self) -> str:
+        """
+        Retourne une représentation de l'objet GlobalCache pour le débogage.
+        
+        Returns:
+            Représentation de l'objet pour le débogage
+        """
+        return self.__str__()
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Retourne un dictionnaire sérialisable contenant les statistiques et l'état du cache.
+        Cette méthode évite les problèmes de sérialisation JSON en fournissant une représentation
+        simple et sérialisable de l'état du cache.
+        
+        Returns:
+            Dictionnaire des statistiques et de l'état du cache
+        """
+        base_info = {
+            "type": "GlobalCache",
+            "adapter_for": "IntelligentCache",
+            "max_size": self._max_size,
+            "ttl_seconds": self._ttl,
+            "initialized": self._initialized,
+            "has_cleanup_task": self._cleanup_task is not None,
+            "intelligent_cache_initialized": self._intelligent_cache is not None,
+        }
+        
+        # Ajouter des statistiques du cache intelligent si disponible
+        # Note: On n'inclut pas l'objet lui-même, uniquement les statistiques
+        if self._intelligent_cache:
+            try:
+                # Version synchronisée pour obtenir les statistiques
+                # sans bloquer le thread principal
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Si nous sommes déjà dans une boucle d'événements, on ne peut pas bloquer
+                    # On retourne juste les informations de base
+                    base_info["stats_available"] = False
+                    base_info["stats_error"] = "Cannot synchronously get stats while in event loop"
+                else:
+                    # On peut exécuter de manière synchrone
+                    cache_stats = loop.run_until_complete(self._intelligent_cache.get_stats())
+                    base_info["stats"] = cache_stats
+                    base_info["stats_available"] = True
+            except Exception as e:
+                # En cas d'erreur, on capture l'erreur sans propager d'objets non-sérialisables
+                base_info["stats_available"] = False
+                base_info["stats_error"] = str(e)
+        else:
+            base_info["stats_available"] = False
+        
+        return base_info
     
     async def _get_cache(self) -> IntelligentCache:
         """

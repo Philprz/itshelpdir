@@ -573,9 +573,19 @@ class AbstractSearchClient(ABC):
         vector = None
         try:
             if hasattr(self, 'embedding_service') and self.embedding_service:
-                vector = await self.embedding_service.get_embedding(question)
+                try:
+                    # CORRECTION: Éviter de passer des objets non-sérialisables dans les logs
+                    vector = await self.embedding_service.get_embedding(question)
+                except Exception as embed_err:
+                    # Capturer l'erreur spécifiquement ici pour éviter la propagation d'objets non-sérialisables
+                    err_message = str(embed_err)
+                    if "Object of type GlobalCache is not JSON serializable" in err_message:
+                        self.logger.error("Erreur de sérialisation GlobalCache lors de la génération d'embedding")
+                    else:
+                        self.logger.error(f"Erreur lors de la génération d'embedding: {err_message}")
+                    vector = None
         except Exception as e:
-            self.logger.warning(f"Erreur lors de la génération de l'embedding: {str(e)}")
+            self.logger.warning(f"Erreur générique lors de la génération de l'embedding: {str(e)}")
             
         # En cas d'erreur ou si aucun embedding n'est disponible, utiliser un vecteur fictif
         if not vector:
