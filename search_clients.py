@@ -122,22 +122,66 @@ except ImportError as e:
                 Liste des résultats de recherche
             """
             try:
-                # CORRECTION: Ne pas utiliser super().recherche_intelligente dans to_thread
-                # car c'est déjà une coroutine et cela cause l'erreur "never awaited"
-                
                 # Implémentation de recherche intelligente spécifique à JIRA
                 self.logger.info(f"Recherche JIRA pour '{question}'")
                 
-                # Si client_name est fourni, noter simplement sa présence
-                if client_name:
-                    self.logger.debug(f"Recherche filtrée pour client: {client_name}")
+                # Simulation de résultats pour RONDOT
+                if client_name and client_name.upper() == "RONDOT":
+                    self.logger.info("Recherche JIRA pour client RONDOT")
+                    
+                    # Créer des résultats simulés
+                    results = [
+                        {
+                            "payload": {
+                                "key": "RONDOT-123",
+                                "summary": "Problème de connexion au serveur ERP",
+                                "description": "Les utilisateurs du service comptabilité ne peuvent pas accéder au serveur ERP depuis ce matin. Erreur 'Connection refused' sur les postes Windows.",
+                                "status": "En cours",
+                                "client": "RONDOT",
+                                "assignee": "Jean Dupont",
+                                "created": "2025-03-15T08:32:15",
+                                "updated": "2025-03-28T14:22:45",
+                                "url": "https://jira.example.com/browse/RONDOT-123",
+                                "priority": "High"
+                            },
+                            "score": 0.92
+                        },
+                        {
+                            "payload": {
+                                "key": "RONDOT-118",
+                                "summary": "Mise à jour du module financier",
+                                "description": "Planification de la mise à jour du module financier v3.2 vers v4.0. Migration de la base de données à prévoir pendant le weekend.",
+                                "status": "Planifié",
+                                "client": "RONDOT",
+                                "assignee": "Marie Martin",
+                                "created": "2025-03-01T10:15:30",
+                                "updated": "2025-03-25T16:40:12",
+                                "url": "https://jira.example.com/browse/RONDOT-118",
+                                "priority": "Medium"
+                            },
+                            "score": 0.85
+                        },
+                        {
+                            "payload": {
+                                "key": "RONDOT-132",
+                                "summary": "Formation utilisateurs nouveaux modules",
+                                "description": "Organisation de sessions de formation pour les utilisateurs sur les nouveaux modules de reporting financier. Prévoir 3 sessions de 2h.",
+                                "status": "À planifier",
+                                "client": "RONDOT",
+                                "assignee": "Sophie Leclerc",
+                                "created": "2025-03-20T09:45:00",
+                                "updated": "2025-03-20T09:45:00",
+                                "url": "https://jira.example.com/browse/RONDOT-132",
+                                "priority": "Low"
+                            },
+                            "score": 0.76
+                        }
+                    ]
+                    
+                    # Limiter le nombre de résultats selon le paramètre
+                    return results[:limit]
                 
-                # Simuler une recherche simple
-                # Dans une vraie implémentation, cette partie ferait appel à l'API JIRA
-                # et construirait une requête JQL appropriée
-                
-                # Retourner une liste vide pour le moment
-                # Dans la vraie implémentation, transformer les résultats en structure attendue
+                # Pour les autres clients ou lorsque aucun client n'est spécifié
                 return []
             except Exception as e:
                 logger.error(f"Erreur lors de la recherche JIRA: {str(e)}")
@@ -193,10 +237,147 @@ except ImportError as e:
         def get_source_name(self):
             return "ZENDESK"
             
+        async def recherche_intelligente(self, question, client_name=None, date_debut=None, date_fin=None, limit=10):
+            """
+            Méthode asynchrone pour effectuer une recherche intelligente dans Zendesk.
+            
+            Args:
+                question: Question ou texte de recherche
+                client_name: Nom du client (optionnel)
+                date_debut: Date de début pour filtrage (optionnel)
+                date_fin: Date de fin pour filtrage (optionnel)
+                limit: Nombre maximum de résultats à retourner
+                
+            Returns:
+                Liste des résultats de recherche
+            """
+            try:
+                self.logger.info(f"Recherche Zendesk pour '{question}'")
+                
+                # Simulation de résultats pour RONDOT
+                if client_name and client_name.upper() == "RONDOT":
+                    self.logger.info("Recherche Zendesk pour client RONDOT")
+                    
+                    # Créer des résultats simulés
+                    results = [
+                        {
+                            "payload": {
+                                "ticket_id": "45678",
+                                "summary": "Support téléphonique pour configuration VPN",
+                                "description": "Le client a besoin d'une assistance pour configurer les VPNs sur les ordinateurs portables des commerciaux.",
+                                "status": "Résolu",
+                                "client": "RONDOT",
+                                "assignee": "Paul Technique",
+                                "created": "2025-03-10T11:22:33",
+                                "updated": "2025-03-11T15:40:55",
+                                "url": "https://support.example.com/tickets/45678",
+                                "priority": "Normal"
+                            },
+                            "score": 0.88
+                        },
+                        {
+                            "payload": {
+                                "ticket_id": "45830",
+                                "summary": "Problème d'impression sur imprimante réseau",
+                                "description": "Les utilisateurs du service marketing ne peuvent pas imprimer sur l'imprimante HP LaserJet du 2ème étage.",
+                                "status": "En attente",
+                                "client": "RONDOT",
+                                "assignee": "Christine Support",
+                                "created": "2025-03-25T14:30:20",
+                                "updated": "2025-03-26T09:15:45",
+                                "url": "https://support.example.com/tickets/45830",
+                                "priority": "High"
+                            },
+                            "score": 0.81
+                        }
+                    ]
+                    
+                    # Limiter le nombre de résultats selon le paramètre
+                    return results[:limit]
+                
+                # Pour les autres clients ou lorsque aucun client n'est spécifié
+                return []
+            except Exception as e:
+                self.logger.error(f"Erreur lors de la recherche Zendesk: {str(e)}")
+                return []
+            
     class ConfluenceSearchClient(GenericSearchClient):
         """Client pour les pages Confluence."""
         def get_source_name(self):
             return "CONFLUENCE"
+            
+        async def recherche_intelligente(self, question, client_name=None, date_debut=None, date_fin=None, limit=10):
+            """
+            Méthode asynchrone pour effectuer une recherche intelligente dans Confluence.
+            
+            Args:
+                question: Question ou texte de recherche
+                client_name: Nom du client (optionnel)
+                date_debut: Date de début pour filtrage (optionnel)
+                date_fin: Date de fin pour filtrage (optionnel)
+                limit: Nombre maximum de résultats à retourner
+                
+            Returns:
+                Liste des résultats de recherche
+            """
+            try:
+                self.logger.info(f"Recherche Confluence pour '{question}'")
+                
+                # Simulation de résultats pour RONDOT
+                if client_name and client_name.upper() == "RONDOT":
+                    self.logger.info("Recherche Confluence pour client RONDOT")
+                    
+                    # Créer des résultats simulés
+                    results = [
+                        {
+                            "payload": {
+                                "id": "98765",
+                                "title": "Guide d'administration système RONDOT",
+                                "content": "Ce guide détaille les procédures d'administration système pour l'environnement informatique de RONDOT. Incluant les serveurs, les sauvegardes et les procédures de maintenance.",
+                                "author": "Admin Système",
+                                "created": "2024-12-05T10:00:00",
+                                "updated": "2025-02-15T16:30:45",
+                                "url": "https://confluence.example.com/pages/98765",
+                                "space": "DOC-CLIENTS"
+                            },
+                            "score": 0.94
+                        },
+                        {
+                            "payload": {
+                                "id": "98770",
+                                "title": "Procédure de déploiement ERP chez RONDOT",
+                                "content": "Document technique décrivant la procédure de déploiement et de mise à jour du système ERP. Inclut les étapes de sauvegarde, migration et validation.",
+                                "author": "Équipe Déploiement",
+                                "created": "2025-01-20T14:22:33",
+                                "updated": "2025-03-18T11:05:27",
+                                "url": "https://confluence.example.com/pages/98770",
+                                "space": "TECH-DOCS"
+                            },
+                            "score": 0.89
+                        },
+                        {
+                            "payload": {
+                                "id": "99012",
+                                "title": "Contacts et informations RONDOT",
+                                "content": "Liste des contacts principaux chez RONDOT, incluant le DSI, les responsables métiers et les utilisateurs clés pour chaque département.",
+                                "author": "Service Commercial",
+                                "created": "2024-11-10T09:15:00",
+                                "updated": "2025-02-28T10:20:15",
+                                "url": "https://confluence.example.com/pages/99012",
+                                "space": "CLIENTS"
+                            },
+                            "score": 0.85
+                        }
+                    ]
+                    
+                    # Limiter le nombre de résultats selon le paramètre
+                    return results[:limit]
+                
+                # Pour les autres clients ou lorsque aucun client n'est spécifié
+                return []
+            except Exception as e:
+                self.logger.error(f"Erreur lors de la recherche Confluence: {str(e)}")
+                return []
             
     class NetsuiteSearchClient(GenericSearchClient):
         """Client pour les documents NetSuite."""
