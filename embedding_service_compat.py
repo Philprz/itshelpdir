@@ -13,6 +13,111 @@ from typing import List, Dict, Any
 # Configuration du logging
 logger = logging.getLogger('ITS_HELP.embedding')
 
+class JSONSerializableEncoder(json.JSONEncoder):
+    """Encodeur personnalisé pour gérer les objets non sérialisables en JSON."""
+    def default(self, obj):
+        try:
+            if hasattr(obj, 'to_json'):
+                return obj.to_json()
+            if hasattr(obj, '__getstate__'):
+                return obj.__getstate__()
+            return super().default(obj)
+        except TypeError:
+            return str(obj)
+
+class SafeCacheProxy:
+    """
+    Proxy de sécurité pour le cache qui évite les problèmes de sérialisation.
+    Ce proxy intercepte toutes les interactions avec le cache et s'assure qu'aucun
+    objet non-sérialisable n'est transmis.
+    """
+    
+    def __init__(self, cache):
+        """
+        Initialise le proxy avec l'objet cache sous-jacent.
+        
+        Args:
+            cache: Objet cache à proxifier
+        """
+        self._cache = cache
+        self._logger = logging.getLogger('ITS_HELP.embedding.cache_proxy')
+        
+    async def get(self, key: str) -> Any:
+        """
+        Récupère une valeur du cache de manière sécurisée.
+        
+        Args:
+            key: Clé à rechercher
+        
+        Returns:
+            Valeur associée à la clé ou None si non trouvée
+        """
+        try:
+            # Tenter d'utiliser la méthode get() asynchrone
+            if hasattr(self._cache, 'get') and callable(self._cache.get):
+                try:
+                    result = await self._cache.get(key, namespace="embeddings")
+                    # Vérifier que la valeur est sérialisable
+                    try:
+                        json.dumps(result)
+                    except Exception as ex:
+                        self._logger.warning(f"Valeur non sérialisable récupérée du cache: {ex.__class__.__name__}")
+                        return None
+                    return result
+                except Exception as e:
+                    self._logger.debug(f"Erreur lors de l'accès au cache async: {e.__class__.__name__}")
+        
+            # Tenter d'utiliser get_embedding() si disponible
+            if hasattr(self._cache, 'get_embedding') and callable(self._cache.get_embedding):
+                # Cette méthode pourrait utiliser le texte original comme clé
+                # Nous ne pouvons pas le récupérer depuis notre hash
+                return None
+            return None
+        except Exception as e:
+            self._logger.warning(f"Erreur proxifiée lors de la récupération depuis le cache: {e.__class__.__name__}")
+            return None
+        
+    async def set(self, key: str, value: Any) -> None:
+        """
+        Stocke une valeur dans le cache de manière sécurisée.
+        
+        Args:
+            key: Clé sous laquelle stocker la valeur
+            value: Valeur à stocker
+        """
+        try:
+            # Vérifier que la valeur est sérialisable
+            # Ce test garantit que nous n'essayons pas de stocker des objets non-sérialisables
+            json.dumps(value)
+            
+            # Tenter d'utiliser la méthode set() asynchrone
+            if hasattr(self._cache, 'set') and callable(self._cache.set):
+                try:
+                    await self._cache.set(key, value, namespace="embeddings")
+                    return
+                except Exception as e:
+                    self._logger.debug(f"Erreur lors de l'écriture dans le cache async: {e.__class__.__name__}")
+        
+            # Tenter d'utiliser set_embedding() si disponible
+            # Note: cette méthode ne peut pas être utilisée correctement car nous avons perdu
+            # le texte original en utilisant un hash comme clé
+            return
+        except (TypeError, OverflowError) as e:
+            # La valeur n'est pas sérialisable, on ignore
+            self._logger.warning(f"Tentative d'écrire une valeur non-sérialisable dans le cache: {e.__class__.__name__}")
+            
+    def to_json(self):
+        """Méthode sécurisée pour convertir l'objet en structure JSON-compatible."""
+        return {"type": "SafeCacheProxy"}
+        
+    def __getstate__(self):
+        """Définit l'état de l'objet pour la sérialisation."""
+        return self.to_json()
+        
+    def __repr__(self):
+        """Représentation string pour le logging et le débogage."""
+        return "SafeCacheProxy()"
+            
 # Import du service original s'il existe
 try:
     from search.utils.embedding_service import EmbeddingService as OriginalEmbeddingService
@@ -187,84 +292,59 @@ except ImportError:
                 "local_cache_size": len(self._local_cache)
             }
             
+        def to_json(self):
+            """Méthode sécurisée pour convertir l'objet en structure JSON-compatible."""
+            try:
+                return {
+                    "model": str(self.model),
+                    "calls": self.call_count,
+                    "errors": self.error_count,
+                    "cache_enabled": self._cache_proxy is not None,
+                    "local_cache_size": len(self._local_cache) if hasattr(self, '_local_cache') else 0
+                }
+            except Exception as e:
+                # Fallback en cas d'erreur
+                return {
+                    "model": str(self.model) if hasattr(self, "model") else "unknown",
+                    "error": f"Erreur de sérialisation: {e.__class__.__name__}"
+                }
             
-class SafeCacheProxy:
-    """
-    Proxy de sécurité pour le cache qui évite les problèmes de sérialisation.
-    Ce proxy intercepte toutes les interactions avec le cache et s'assure qu'aucun
-    objet non-sérialisable n'est transmis.
-    """
-    
-    def __init__(self, cache):
-        """
-        Initialise le proxy avec l'objet cache sous-jacent.
+        def __getstate__(self):
+            """Définit l'état de l'objet pour la sérialisation."""
+            # Retourner un dictionnaire contenant uniquement des attributs sérialisables
+            state = {}
+            try:
+                # Attributs sûrs
+                state["model"] = str(self.model) if hasattr(self, "model") else "unknown"
+                state["call_count"] = self.call_count if hasattr(self, "call_count") else 0
+                state["error_count"] = self.error_count if hasattr(self, "error_count") else 0
+                
+                # Information sur la présence d'attributs (mais pas les objets eux-mêmes)
+                state["has_cache_proxy"] = hasattr(self, "_cache_proxy") and self._cache_proxy is not None
+                state["has_openai_client"] = hasattr(self, "openai_client") and self.openai_client is not None
+                state["has_logger"] = hasattr(self, "logger") and self.logger is not None
+                
+                # Taille du cache local sans inclure les objets
+                if hasattr(self, "_local_cache"):
+                    state["local_cache_size"] = len(self._local_cache)
+            except Exception as e:
+                # En cas d'erreur, retourner un état minimal
+                state = {"serialization_error": True, "error_type": str(e.__class__.__name__)}
+            
+            return state
         
-        Args:
-            cache: Objet cache à proxifier
-        """
-        self._cache = cache
-        self._logger = logging.getLogger('ITS_HELP.embedding.cache_proxy')
-        
-    async def get(self, key: str) -> Any:
-        """
-        Récupère une valeur du cache de manière sécurisée.
-        
-        Args:
-            key: Clé à rechercher
+        def __deepcopy__(self, memo):
+            """Support pour la copie profonde sans copier les objets non-copiables."""
+            # Créer une nouvelle instance sans initialiser complètement
+            result = self.__class__.__new__(self.__class__)
+            memo[id(self)] = result
             
-        Returns:
-            Valeur associée à la clé ou None si non trouvée
-        """
-        try:
-            # Tenter d'utiliser la méthode get() asynchrone
-            if hasattr(self._cache, 'get') and callable(self._cache.get):
-                try:
-                    result = await self._cache.get(key, namespace="embeddings")
-                    # Vérifier que la valeur est sérialisable
-                    try:
-                        json.dumps(result)
-                    except Exception as ex:
-                        self._logger.warning(f"Valeur non sérialisable récupérée du cache: {ex.__class__.__name__}")
-                        return None
-                    return result
-                except Exception as e:
-                    self._logger.debug(f"Erreur lors de l'accès au cache async: {e.__class__.__name__}")
+            # Copier les attributs simples
+            for k, v in self.__getstate__().items():
+                setattr(result, k, v)
+                
+            return result
             
-            # Tenter d'utiliser get_embedding() si disponible
-            if hasattr(self._cache, 'get_embedding') and callable(self._cache.get_embedding):
-                # Cette méthode pourrait utiliser le texte original comme clé
-                # Nous ne pouvons pas le récupérer depuis notre hash
-                return None
-            return None
-        except Exception as e:
-            self._logger.warning(f"Erreur proxifiée lors de la récupération depuis le cache: {e.__class__.__name__}")
-            return None
-            
-    async def set(self, key: str, value: Any) -> None:
-        """
-        Stocke une valeur dans le cache de manière sécurisée.
-        
-        Args:
-            key: Clé sous laquelle stocker la valeur
-            value: Valeur à stocker
-        """
-        try:
-            # Vérifier que la valeur est sérialisable
-            # Ce test garantit que nous n'essayons pas de stocker des objets non-sérialisables
-            json.dumps(value)
-            
-            # Tenter d'utiliser la méthode set() asynchrone
-            if hasattr(self._cache, 'set') and callable(self._cache.set):
-                try:
-                    await self._cache.set(key, value, namespace="embeddings")
-                    return
-                except Exception as e:
-                    self._logger.debug(f"Erreur lors de l'écriture dans le cache async: {e.__class__.__name__}")
-            
-            # Tenter d'utiliser set_embedding() si disponible
-            # Note: cette méthode ne peut pas être utilisée correctement car nous avons perdu
-            # le texte original en utilisant un hash comme clé
-            return
-        except (TypeError, OverflowError) as e:
-            # La valeur n'est pas sérialisable, on ignore
-            self._logger.warning(f"Tentative d'écrire une valeur non-sérialisable dans le cache: {e.__class__.__name__}")
+        def __repr__(self):
+            """Représentation string de la classe pour le logging et le débogage."""
+            return f"EmbeddingService(model={self.model}, call_count={self.call_count})"

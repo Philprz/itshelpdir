@@ -6,17 +6,16 @@ avec optimisation du batching et du caching.
 """
 
 import logging
-import asyncio
 import time
 import numpy as np
 import json
-from typing import Dict, List, Any, Optional, Union, Callable, Tuple
+from typing import Dict, List, Any, Optional
 
 # Import des interfaces nécessaires
 from .base import EmbeddingService
 
 # Import du cache intelligent
-from ...infrastructure.cache import get_cache_instance
+from infrastructure.cache import get_cache_instance
 
 # Configuration du logging
 logger = logging.getLogger("ITS_HELP.adapters.embeddings.openai")

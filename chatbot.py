@@ -17,7 +17,6 @@ from gestion_clients import extract_client_name
 # Importation de la factory (pas de dépendance circulaire ici)
 from search_factory_compat import search_factory
 from configuration import global_cache
-
 # Déplacement à l'intérieur des méthodes pour éviter les cycles
 # from embedding_service import EmbeddingService
 # from translation_service import TranslationService
