@@ -51,6 +51,29 @@ except ImportError as e:
         def get_source_name(self):
             """Retourne le nom de la source de données."""
             return self.collection_name.upper()
+            
+        def __getstate__(self):
+            """Définit l'état de l'objet pour la sérialisation."""
+            state = {}
+            try:
+                # Attributs sûrs uniquement
+                state["collection_name"] = self.collection_name
+                state["has_client"] = hasattr(self, "client") and self.client is not None
+                state["has_embedding_service"] = hasattr(self, "embedding_service") and self.embedding_service is not None
+                state["has_translation_service"] = hasattr(self, "translation_service") and self.translation_service is not None
+            except Exception:
+                state = {"collection_name": getattr(self, "collection_name", "unknown")}
+            return state
+
+        def to_json(self):
+            """Méthode pour convertir en structure JSON-compatible."""
+            try:
+                return {
+                    "collection_name": self.collection_name,
+                    "type": self.__class__.__name__
+                }
+            except Exception:
+                return {"type": "search_client"}
     
     class DefaultResultProcessor:
         """Processeur de résultats par défaut."""

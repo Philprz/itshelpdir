@@ -9,6 +9,7 @@ import logging
 import hashlib
 import json
 from typing import List, Dict, Any
+import asyncio
 
 # Configuration du logging
 logger = logging.getLogger('ITS_HELP.embedding')
@@ -69,9 +70,24 @@ class SafeCacheProxy:
         
             # Tenter d'utiliser get_embedding() si disponible
             if hasattr(self._cache, 'get_embedding') and callable(self._cache.get_embedding):
-                # Cette méthode pourrait utiliser le texte original comme clé
-                # Nous ne pouvons pas le récupérer depuis notre hash
-                return None
+                try:
+                    # Cette méthode est asynchrone dans GlobalCache
+                    if asyncio.iscoroutinefunction(self._cache.get_embedding):
+                        result = await self._cache.get_embedding(key)
+                    else:
+                        # Appel synchrone en fallback
+                        result = self._cache.get_embedding(key)
+                    
+                    # Vérifier que le résultat est valide et sérialisable
+                    if result is not None:
+                        try:
+                            json.dumps(result)
+                            return result
+                        except Exception:
+                            self._logger.warning("Résultat d'embedding non sérialisable du cache")
+                except Exception as e:
+                    self._logger.debug(f"Erreur lors de l'accès à get_embedding: {e.__class__.__name__}")
+            
             return None
         except Exception as e:
             self._logger.warning(f"Erreur proxifiée lors de la récupération depuis le cache: {e.__class__.__name__}")
@@ -178,31 +194,27 @@ except ImportError:
                 self.logger.warning("Tentative de génération d'embedding pour un texte vide")
                 return [0.0] * 1536  # Embedding par défaut pour un texte vide
                 
-            # Normaliser le texte
-            text = self._normalize_text(text)
-            
-            # Générer une clé de cache basée sur le texte
-            cache_key = self._generate_cache_key(text)
-            
-            # Vérifier dans le cache local d'abord (plus sûr)
-            if cache_key in self._local_cache:
-                return self._local_cache[cache_key]
-                
-            # Vérifier dans le cache externe via le proxy sécurisé
-            if self._cache_proxy:
-                try:
-                    cached_embedding = await self._cache_proxy.get(cache_key)
-                    if cached_embedding:
-                        return cached_embedding
-                except Exception as e:
-                    self.logger.warning(f"Erreur lors de l'accès au cache: {e.__class__.__name__}")
-            
-            # Générer l'embedding avec le client configuré
             try:
+                # Normaliser le texte et utiliser le cache
+                text = self._normalize_text(text)
+                cache_key = self._generate_cache_key(text)
+                
+                # Cache local (sécurisé)
+                if cache_key in self._local_cache:
+                    return self._local_cache[cache_key]
+                    
+                # Cache externe via proxy
+                if self._cache_proxy:
+                    try:
+                        cached_embedding = await self._cache_proxy.get(cache_key)
+                        if cached_embedding:
+                            return cached_embedding
+                    except Exception as e:
+                        self.logger.warning(f"Erreur lors de l'accès au cache: {e.__class__.__name__}")
+                
+                # Génération via OpenAI avec gestion d'erreurs renforcée
                 if self.openai_client:
                     embedding = await self._get_openai_embedding(text)
-                    
-                    # Stocker dans le cache local
                     self._local_cache[cache_key] = embedding
                     
                     # Stocker dans le cache externe via le proxy sécurisé
@@ -279,7 +291,7 @@ except ImportError:
                 
             except Exception as e:
                 self.logger.error(f"Erreur API OpenAI: {str(e)}")
-                raise
+                return [0.0] * 1536  # Embedding par défaut en cas d'erreur
                 
         def get_stats(self) -> Dict[str, Any]:
             """Retourne des statistiques sur l'utilisation du service."""
