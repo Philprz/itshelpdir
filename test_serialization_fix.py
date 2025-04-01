@@ -6,15 +6,14 @@ import asyncio
 import logging
 import sys
 import json
-from typing import Any, Dict
+
+# Import des composants à tester
+from embedding_service_compat import EmbeddingService
+from src.infrastructure.cache_compat import GlobalCache
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('test_serialization_fix')
-
-# Import des composants à tester
-from embedding_service_compat import EmbeddingService, SafeCacheProxy
-from src.infrastructure.cache_compat import GlobalCache
 
 async def test_embedding_service_with_global_cache():
     """Test de l'EmbeddingService avec GlobalCache pour vérifier la sérialisation."""
@@ -54,31 +53,30 @@ async def test_embedding_service_with_global_cache():
         
         # Vérifier le résultat
         if isinstance(embedding, list):
-            logger.info(f"✅ Succès: embedding est une liste de {len(embedding)} éléments")
+            logger.info("✅ Succès: embedding est une liste de {} éléments".format(len(embedding)))
         else:
-            logger.error(f"❌ Échec: embedding n'est pas une liste mais {type(embedding)}")
+            logger.error("❌ Échec: embedding n'est pas une liste mais {}".format(type(embedding)))
             return False
             
         # Tester la sérialisation du service
         logger.info("Test de sérialisation du service")
         service_dict = embedding_service.to_json()
         json_str = json.dumps(service_dict)
-        logger.info(f"✅ Sérialisation du service réussie: {json_str[:50]}...")
+        logger.info("✅ Sérialisation du service réussie: {}...".format(json_str[:50]))
         
         # Tester la récupération depuis le cache
         logger.info("Test de récupération depuis le cache")
-        cache_key = embedding_service._generate_cache_key("Test text")
         embedding_from_cache = await embedding_service.get_embedding("Test text")
         
         if isinstance(embedding_from_cache, list):
-            logger.info(f"✅ Succès: embedding depuis le cache est une liste")
+            logger.info("✅ Succès: embedding depuis le cache est une liste")
         else:
-            logger.error(f"❌ Échec: embedding depuis le cache n'est pas une liste")
+            logger.error("❌ Échec: embedding depuis le cache n'est pas une liste")
             return False
             
         return True
     except Exception as e:
-        logger.error(f"❌ Exception lors du test: {str(e)}")
+        logger.error("❌ Exception lors du test: {}".format(str(e)))
         import traceback
         traceback.print_exc()
         return False
@@ -101,17 +99,17 @@ async def test_search_client_serialization():
         logger.info("Test de la méthode to_json")
         client_dict = client.to_json()
         json_str = json.dumps(client_dict)
-        logger.info(f"✅ Sérialisation du client réussie: {json_str}")
+        logger.info("✅ Sérialisation du client réussie: {}".format(json_str))
         
         # Tester __getstate__
         logger.info("Test de __getstate__")
         state = client.__getstate__()
         json_str = json.dumps(state)
-        logger.info(f"✅ Sérialisation de l'état réussie: {json_str}")
+        logger.info("✅ Sérialisation de l'état réussie: {}".format(json_str))
         
         return True
     except Exception as e:
-        logger.error(f"❌ Exception lors du test de sérialisation: {str(e)}")
+        logger.error("❌ Exception lors du test de sérialisation: {}".format(str(e)))
         import traceback
         traceback.print_exc()
         return False
@@ -123,12 +121,12 @@ async def main():
     # Test 1: EmbeddingService avec GlobalCache
     logger.info("Test 1: EmbeddingService avec GlobalCache")
     test1_result = await test_embedding_service_with_global_cache()
-    logger.info(f"Test 1: {'✅ SUCCÈS' if test1_result else '❌ ÉCHEC'}")
+    logger.info("Test 1: {}".format('✅ SUCCÈS' if test1_result else '❌ ÉCHEC'))
     
     # Test 2: Sérialisation des clients de recherche
     logger.info("Test 2: Sérialisation des clients de recherche")
     test2_result = await test_search_client_serialization()
-    logger.info(f"Test 2: {'✅ SUCCÈS' if test2_result else '❌ ÉCHEC'}")
+    logger.info("Test 2: {}".format('✅ SUCCÈS' if test2_result else '❌ ÉCHEC'))
     
     # Résultat global
     if test1_result and test2_result:

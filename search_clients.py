@@ -204,6 +204,11 @@ except ImportError as e:
         """Client pour les documents SAP."""
         def get_source_name(self):
             return "SAP"
+            
+    class ERPSearchClient(GenericSearchClient):
+        """Client pour les documents ERP génériques."""
+        def get_source_name(self):
+            return "ERP"
 
 
 def get_search_client(client_type: str, **kwargs) -> Optional[Any]:
