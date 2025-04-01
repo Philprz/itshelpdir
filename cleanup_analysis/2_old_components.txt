@@ -1,0 +1,8 @@
+# Scripts archivés et anciens composants remplacés
+/archive_scripts/                     # Ce dossier contient d'anciennes versions des composants principaux
+                                      # Ces fichiers sont conservés à titre d'archive mais ne sont plus utilisés
+                                      # dans le code principal et peuvent être déplacés hors du projet
+
+# Fichiers de composants compatibilité maintenant refactorisés dans /src
+embedding_service.py                  # Remplacé par embedding_service_compat.py et src/adapters/embeddings/
+search_factory.py                     # Remplacé par search_factory_compat.py et la nouvelle architecture

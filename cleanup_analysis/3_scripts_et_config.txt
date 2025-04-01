@@ -1,0 +1,12 @@
+# Scripts de démarrage redondants
+start_windows.bat                    # Redondant avec start.bat/start.sh
+start_windows.ps1                    # Fonctionnalité maintenant intégrée dans start_windows.py
+run_app.py                           # Redondant avec wsgi.py qui est le point d'entrée principal
+
+# Fichiers de configuration et documentation obsolètes
+MIGRATION_PLAN.md                     # La migration étant terminée, ce plan n'est plus nécessaire
+erp_collections_recommendations.txt   # Recommandations déjà appliquées
+
+# Fichiers temporaires ou générés
+__pycache__/                          # Fichiers compilés Python (.pyc) - régénérés automatiquement
+.pytest_cache/                        # Cache de pytest - régénéré automatiquement

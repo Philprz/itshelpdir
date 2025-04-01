@@ -1,0 +1,13 @@
+# Tests et fichiers de débogage redondants
+test_serialization.py                  # Script de test créé pour résoudre le problème de sérialisation, maintenant résolu
+test_qdrant_simple.py                  # Test simple redondant avec test_qdrant_connection.py
+list_qdrant_collections.py             # Fonctionnalité déjà intégrée dans inspect_qdrant_collections.py
+cache_benchmark_results.txt            # Fichier de résultats temporaire
+direct_search_results.json             # Résultats de test
+diagnostic_clients.log                 # Log de diagnostic non nécessaire en production
+interface_fix.log                      # Log de correction temporaire
+run_unit_tests.py                      # Redondant avec pytest standard
+
+# Backups et anciennes versions (déjà versionnés avec Git)
+backup_20250326_085146/               # Dossier de backup ancien
+backup_20250326_085355/               # Dossier de backup ancien
