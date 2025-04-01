@@ -64,7 +64,9 @@ class QdrantSearchClientFactory:
                 openai_client = None
                 
             # Services
-            self.embedding_service = EmbeddingService(openai_client, global_cache)
+            from embedding_service_compat import SafeCacheProxy
+            self.embedding_service = EmbeddingService(openai_client, SafeCacheProxy(global_cache))
+
             self.translation_service = TranslationService(None, global_cache)
             if openai_client:
                 self.translation_service.set_async_client(openai_client)
